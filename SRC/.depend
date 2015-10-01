@@ -1,0 +1,11 @@
+global.o: global.cc global.h terms.h io.h types.h unification.h
+io.o: io.cc io.h
+pattern-match.o: pattern-match.cc io.h pattern-match.h terms.h global.h \
+  types.h unification.h
+terms.o: terms.cc terms.h io.h global.h types.h unification.h \
+  pattern-match.h
+types.o: types.cc types.h global.h terms.h io.h unification.h
+unification.o: unification.cc types.h unification.h terms.h io.h global.h
+lex.yy.o: lex.yy.c terms.h io.h unification.h types.h y.tab.h
+y.tab.o: y.tab.c global.h terms.h io.h types.h unification.h \
+  pattern-match.h
