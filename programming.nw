@@ -1,0 +1,438 @@
+% -*- mode: Noweb; noweb-code-mode: fundamental-mode; c-basic-offset: 8; -*-
+
+\chapter{Programming in Escher}\label{chap:escher programming}
+
+\section{Programming Examples}
+
+
+<<data.es>>=
+list1 : (List Int) ;
+list1 = [] ;
+
+list2 : (List Int) ;
+list2 = (# 1 []) ;
+
+list3 : (List Int) ;
+list3 = (# 1 (# 2 [])) ;
+
+list4 : (List Int) ;
+list4 = (# 1 list3) ;
+
+list5 : (List Int) ;
+list5 = (# 2 list4) ;
+
+list6 : (List Int) ;
+list6 = (# 1 (# 1 (# 2 (# 3 (# 4 []))))) ;
+
+list7 : (List Int) ;
+list7 = (# 1 (# 1 (# 2 (# 3 (# 3 (# 4 (# 4 (# 4 [])))))))) ;
+
+list8 : (List Int) ;
+list8 = (# 1 (# 1 (# 2 (# 3 (# 3 (# 4 (# 4 (# 3 [])))))))) ;
+
+list88 : (List Int) ;
+list88 = (# 1 (# 1 (# 2 (# 3 (# 3 (# 4 (# 4 (# 3 [])))))))) ;
+
+list9 : (List Int) ;
+list9 = (# 1 (# 1 (# 2 (# 3 (# 3 []))))) ;
+
+us1 : (List Int) ;
+us1 = (# 199 (# 3 (# 2 (# 1 (# 99 (# 12 (# 20 (# 21 (# 51 (# 42 [])))))))))) ; 
+
+us2 : (List Int) ;
+us2 = (# 7 (# 33 (# 120 (# 1 (# 199 (# 1012 (# 1120 (# 821 (# 851 (# 542 us1)))))))))) ; 
+
+us3 : (List Int) ;
+us3 = (# 0 (# 44 (# 12 (# 15 (# 990 (# 125 (# 2220 (# 921 (# 511 (# 442 us2)))))))))) ;
+
+us4 : (List Int) ;
+us4 = (# 20 (# 98 (# 290 (# 10 (# 90 (# 123 (# 2300 (# 210 (# 513 (# 342 us3)))))))))) ;
+
+us5 : (List Int) ;
+us5 = (# 13 (# 32 (# 29 (# 9 (# 299 (# 122 (# 200 (# 219 (# 5134 (# 242 us4)))))))))) ;
+
+us6 : (List Int) ;
+us6 = (# 180 (# 39 (# 27 (# 13 (# 91 (# 112 (# 25 (# 211 (# 151 (# 142 us5)))))))))) ;
+
+-- This is an example of a function with arity 1 but effective arity 0
+set1 : Int -> Bool ;
+set1 = \x.if (= x 1) then True else if (= x 2) then True else False ;
+
+set2 : Int -> Bool ;
+set2 = \x.if (= x 2) then True else if (= x 1) then True else False ;
+
+set3 : Int -> Bool ;
+set3 = \x.if (= x 1) then True else False ;
+
+set4 : Int -> Bool ;
+set4 = \y.if (= y 1) then True else False ;
+
+set5 : Int -> Bool ;
+set5 = \x.if (= x 2) then True else if (= x 3) then True else False ;
+
+{-
+Annie, Bill, Mary, Joe, Harry, Ginny : People ;
+prod0 : (People * People * People * People) ;
+prod0 = (Annie, Bill, Mary, Joe) ;
+prod1 : (People * People * People * People) ;
+prod1 = (Annie, Harry, Ginny, Joe) ;
+prod2 : (People * People * People * People) ;
+prod2 = (Annie, Harry, Ginny, Joe) ;
+-}
+@
+
+<<queries.es>>=
+import booleans.es ;
+import lists.es ;
+import sets.es ;
+import data.es ;
+
+-- : (isort us6) ; -- (2855, 0.467)
+
+-- : (qsort us6) ; -- (18249, 2.007)
+
+-- : (= () ()) ; -- (1)
+-- : (= prod0 prod1) ; -- (8)
+-- : (= prod2 prod1) ; -- (10)
+-- : (= list3 list2) ; -- (6)
+-- : (= list88 list8) ; -- (27)    -- 0.010
+
+-- : ((less \pve2.((= pve2) 1)) \pve3.((= pve3) 1)) ;
+
+-- : (= set3 set4) ; -- (22)
+-- : (= set3 set5) ; -- (15)
+-- : (= set1 set2) ; -- (66) -- 0.021
+
+-- There is a difference because of simplifyConjunction2
+-- : (append (x, y, list2 )) ; -- (21)
+-- : (append (u, v, list2 )) ; -- (23)
+
+-- : (append (x, y, list8)) ; -- (150)
+-- : (append (u, v, list8)) ; -- (128)
+-- : (append (list9, z, (concat (list8, list6)))) ; -- (91)
+-- : (append (list6, v, (concat (list8, list6)))) ; -- (78)
+-- : (append (list9, (concat (list8, list6)), x)) ; -- (149) -- var capture
+-- : (append (list9, (concat (list8, list6)), w)) ; -- (155) -- 0.164
+
+-- : (delete ( 1, ((# 2) ((# 1) [])), ((# 2) []))) ; -- (14)
+-- : (delete ( 12, ((# 2) ((# 1) [])), ((# 2) []))) ; -- (16)
+-- : (delete ( 2, ((# 2) ((# 1) ((# 2) [])  )), x )) ; -- (28) -- 0.012
+
+-- : (permute (((# 1) []) , x)) ; -- (19)
+-- : (permute ( ((# 2) ((# 1) [])), x)) ; -- (85) -- 0.022
+
+-- : (permute ( ((# 3) ((# 2) ((# 1) []))), x)) ; -- (292, 0.064)
+-- : (permute ( (# 10 (# 3 (# 2 (# 1 [])))), x)) ; -- (1328, 0.440)
+-- : (permute ( (# 12 (# 10 (# 3 (# 2 (# 1 []))))), x)) ; -- (6305, 7.061)
+
+-- : (sorted list7) ; -- (74)
+-- : (sorted list8) ; -- (71)
+-- : (sorted (isort us6)) ; -- (8668) -- 1.809
+
+
+-- crickettennis = \x.if (= x Cricket) then True
+--                    else if (= x Tennis) then True else False ;
+-- : \x.(pi \y.(implies (crickettennis y) (likes (x,y)))) -- (159)
+-- : \x.(pi \y.(implies (favourite y) (likes (x,y)))) -- (129) -- 0.038
+-- 
+-- 
+-- 
+-- : (powerset \x.((|| ((= x) 1)) ((= x) 2))) -- (41)
+-- : (linearise \x.((|| ((= x) 1)) ((= x) 2))) -- (8)
+-- : ((union \x.((|| ((= x) 1)) ((= x) 2))) \x.((|| ((= x) 1)) ((= x) 3))) -- (3)
+-- 
+-- : (intersect set12 set13) -- (31)
+-- -- 0.021
+-- 
+-- : (msetunion mset1 mset2) -- (52)
+-- : (msetdiff mset1 mset2) -- (22)
+-- : (msetmax mset1 mset2) -- (52)
+-- : (msetmin mset1 mset2) -- (19) -- 0.015
+-- 
+-- : (msetinc mset0 mset2) -- (34)
+-- : (msetmember F mset1) -- (8)
+-- : (msetmember A mset1) -- (6) -- 0.0012
+-- 
+-- bunch = \x.if (= x (Abloy,3,Short,Normal)) then True
+--            else if (= x (Abloy,4,Medium,Broad)) then True else False ;
+-- 
+-- (projmake (x1,x2,x3,x4)) = x1
+-- (projlength (x1,x2,x3,x4)) = x3
+-- 
+-- -- cond : Key -> Bool
+-- cond = \x.(&& (= Abloy (projmake x)) (= Medium (projlength x)))
+-- 
+-- (setexists1 p t) = (sigma \x.(&& (t x) (p x)))
+-- 
+-- : (setexists1 cond bunch) -- (27, 0.0010)
+-- 
+
+Avon , Bedfordshire , Berkshire , 
+Buckinghamshire , Cambridgeshire , Cornwall ,
+Devon , Dorset , Essex , Gloucestershire ,
+Hampshire , Herefordshire , Hertfordshire ,
+Kent , London , Northamptonshire , Oxfordshire ,
+Somerset , Surrey , Sussex , Warwickshire ,        
+Wiltshire , Worcestershire : County ;
+
+Bath , Bournemouth , Bristol , Cheltenham ,
+Cirencester , Dorchester , Exeter , Gloucester ,
+Penzance , Plymouth , Salisbury , Shaftesbury ,
+Sherbourne , Taunton , Torquay , Truro , 
+Winchester : City ;
+
+neighbours : (County * County) -> Bool ;
+neighbours = 
+  \x.if (= x (Devon, Cornwall)) then True
+     else if (= x (Devon, Dorset)) then True
+     else if (= x (Devon, Somerset)) then True
+     else if (= x (Avon, Somerset)) then True
+     else if (= x (Avon, Wiltshire)) then True
+     else if (= x (Avon, Gloucestershire)) then True
+     else if (= x (Dorset, Wiltshire)) then True
+     else if (= x (Somerset, Wiltshire)) then True
+     else if (= x (Gloucestershire, Wiltshire)) then True
+     else if (= x (Dorset, Somerset)) then True
+     else if (= x (Dorset, Hampshire)) then True
+     else if (= x (Hampshire, Wiltshire)) then True
+     else if (= x (Hampshire, Berkshire)) then True
+     else if (= x (Hampshire, Sussex)) then True
+     else if (= x (Hampshire, Surrey)) then True
+     else if (= x (Sussex, Surrey)) then True
+     else if (= x (Sussex, Kent)) then True
+     else if (= x (London, Surrey)) then True
+     else if (= x (London, Kent)) then True
+     else if (= x (London, Essex)) then True
+     else if (= x (London, Hertfordshire)) then True
+     else if (= x (London, Buckinghamshire)) then True
+     else if (= x (Surrey, Buckinghamshire)) then True
+     else if (= x (Surrey, Kent)) then True
+     else if (= x (Surrey, Berkshire)) then True
+     else if (= x (Oxfordshire, Berkshire)) then True
+     else if (= x (Oxfordshire, Wiltshire)) then True
+     else if (= x (Oxfordshire, Gloucestershire)) then True
+     else if (= x (Oxfordshire, Warwickshire)) then True
+     else if (= x (Oxfordshire, Northamptonshire)) then True
+     else if (= x (Oxfordshire, Buckinghamshire)) then True
+     else if (= x (Berkshire, Wiltshire)) then True
+     else if (= x (Berkshire, Buckinghamshire)) then True
+     else if (= x (Gloucestershire, Worcestershire)) then True
+     else if (= x (Worcestershire, Herefordshire)) then True
+     else if (= x (Worcestershire, Warwickshire)) then True
+     else if (= x (Bedfordshire, Buckinghamshire)) then True
+     else if (= x (Bedfordshire, Northamptonshire)) then True
+     else if (= x (Bedfordshire, Cambridgeshire)) then True
+     else if (= x (Bedfordshire, Hertfordshire)) then True
+     else if (= x (Hertfordshire, Essex)) then True
+     else if (= x (Hertfordshire, Cambridgeshire)) then True
+     else if (= x (Hertfordshire, Buckinghamshire)) then True
+     else if (= x (Buckinghamshire, Northamptonshire)) then True else False ;
+
+distance : (City * City * Int) -> Bool ;
+distance = 
+  \x.if (= x (Plymouth, Exeter, 42)) then True
+     else if (= x (Exeter, Bournemouth, 82)) then True
+     else if (= x (Bristol, Taunton, 43)) then True
+     else if (= x (Bristol, Gloucester, 35)) then True
+     else if (= x (Torquay, Exeter, 23)) then True
+     else if (= x (Plymouth, Torquay, 24)) then True
+     else if (= x (Bristol, Bath, 13)) then True
+     else if (= x (Exeter, Taunton, 34)) then True
+     else if (= x (Penzance, Plymouth, 78)) then True
+     else if (= x (Taunton, Bournemouth, 70)) then True
+     else if (= x (Bournemouth, Salisbury, 28)) then True
+     else if (= x (Taunton, Salisbury, 64)) then True
+     else if (= x (Salisbury, Bath, 40)) then True
+     else if (= x (Bath, Gloucester, 39)) then True
+     else if (= x (Bournemouth, Bath, 65)) then True
+     else if (= x (Truro, Penzance, 26)) then True
+     else if (= x (Plymouth, Truro, 52)) then True
+     else if (= x (Shaftesbury, Salisbury, 20)) then True
+     else if (= x (Sherbourne, Shaftesbury, 16)) then True
+     else if (= x (Dorchester, Bournemouth, 28)) then True
+     else if (= x (Salisbury, Winchester, 24)) then True
+     else if (= x (Exeter, Sherbourne, 53)) then True
+     else if (= x (Sherbourne, Taunton, 29)) then True
+     else if (= x (Bath, Cirencester, 32)) then True
+     else if (= x (Cirencester, Cheltenham, 16)) then True
+     else if (= x (Cheltenham, Gloucester, 9)) then True
+     else if (= x (Dorchester, Sherbourne, 19)) then True
+     else if (= x (Bath, Shaftesbury, 33)) then True
+     else if (= x (Winchester, Bournemouth, 41)) then True
+     else if (= x (Exeter, Dorchester, 53)) then True else False ;
+
+isin : (City * County) -> Bool ;
+isin = 
+  \x.if (= x (Bristol, Avon)) then True
+     else if (= x (Taunton, Somerset)) then True
+     else if (= x (Salisbury, Wiltshire)) then True
+     else if (= x (Bath, Avon)) then True
+     else if (= x (Bournemouth, Dorset)) then True
+     else if (= x (Gloucester, Gloucestershire)) then True
+     else if (= x (Torquay, Devon)) then True
+     else if (= x (Penzance, Cornwall)) then True
+     else if (= x (Plymouth, Devon)) then True
+     else if (= x (Exeter, Devon)) then True
+     else if (= x (Winchester, Hampshire)) then True
+     else if (= x (Dorchester, Dorset)) then True
+     else if (= x (Cirencester, Gloucestershire)) then True
+     else if (= x (Truro, Cornwall)) then True
+     else if (= x (Cheltenham, Gloucestershire)) then True
+     else if (= x (Shaftesbury, Dorset)) then True
+     else if (= x (Sherbourne, Dorset)) then True else False ;
+
+-- : \x.(sigma \y.(&& (|| (distance (Bristol, x, y)) 
+--                        (distance (x, Bristol, y)))  
+--                    (< y 40)) ) ; -- (582, 0.070) 
+
+-- : \x.\y.(sigma \z.(&& (distance (x,y,z)) (< z 20))) ; -- (239, 0.043)
+
+-- : \x.(|| (neighbours (Oxfordshire,x)) (neighbours (x, Oxfordshire))) ;
+-- -- (395, 0.059) 
+
+-- : \x.(sigma \y.(&& (isin (x,y)) (/= y Wiltshire))) ; -- (158, 0.037)
+
+-- : \x.(sigma \y.(&& (|| (neighbours (Oxfordshire,y)) 
+--                       (neighbours (y, Oxfordshire))) (isin (x,y)))) ;
+-- -- (1174, 0.150)
+ 
+-- : \x.(sigma \y.(&& (isin (x,y)) (|| (neighbours (Oxfordshire,y)) 
+--             (neighbours (y, Oxfordshire)))  )) ; -- (9446, 1.369)
+ 
+-- westcountry : County -> Bool ;
+-- westcountry = \x.if (= x Devon) then True else if (= x Cornwall) then True 
+--                  else if (= x Somerset) then True  
+-- 		    else if (= x Avon) then True else False ;
+-- : \x.(sigma \y.(&& (westcountry y) (isin (x,y)))) ; -- (293, 0.054)
+
+-- : \x.(sigma \y.(sigma \z.(&& (|| (distance (Bristol, y, z)) 
+--     (distance (y, Bristol, z)) )  (&& (< z 50) (isin (y,x))) ))) ; -- (915, 0.130)
+
+-- : (pi \x.(implies (|| (neighbours (Avon,x)) (neighbours (x,Avon))) 
+--       (sigma \y.(isin (y,x))) )) ; -- (740, 0.364)
+-- 
+-- : (sigma \x.(&& (isin (Bristol, x))
+--                 (pi \z.(implies (sigma \y.(&& (|| (distance (Bristol, z, y)) 
+--                                        (distance (z, Bristol, y))) (< y 40)))
+--                                  (isin (z, x)))))) ; -- (335, 0.073)
+@
+
+<<tricks.es>>=
+-- these rules are supposed to bring out conjunctively embedded terms of the 
+-- form (x = t).
+-- a loop can occur if the NOTAPP condition in the third statement is not
+-- in place
+-- (&& u_SV{NOTAPP,=} (= x_SV{VAR} t_SV)) = (&& (= x_SV t_SV) u_SV)
+-- (&& (&& (= x_SV{VAR} t_SV) u_SV) v_SV) = 
+--                           (&& (= x_SV t_SV) (&& u_SV v_SV))
+-- (&& u_SV{NOTAPP,=} (&& (= x_SV{VAR} t_SV) v_SV)) =
+--                           (&& (= x_SV t_SV) (&& u_SV v_SV))
+
+-- swap equality order 
+-- (= t_SV{NOTVAR} x_SV{VAR}) = (= x_SV t_SV)
+
+@
+
+\begin{comment}
+The following is a program that calculates the day a particular date
+falls on.
+\end{comment}
+
+<<tvrec.es>>=
+(weekday x) = if (<= 2 (whatday x)) then True else False ;
+
+(whatday (x,y,z)) = 
+   (mod
+    (sub
+     (add (add (add z 
+                   (julian_day (x,y,z))) 
+                   (integer (sub z 1) 4))
+                   (integer (sub z 1) 400))
+     (integer (sub z 1) 100))
+    7)
+
+(decode_day 0) = Saturday
+(decode_day 1) = Sunday
+(decode_day 2) = Monday
+(decode_day 3) = Tuesday
+(decode_day 4) = Wednesday
+(decode_day 5) = Thursday
+(decode_day 6) = Friday
+
+(julian_day (x,1,z)) = x
+(julian_day (x,y,z)) = (add x (sumDays ((sub y 1),z)))
+
+(sumDays (y,z)) = 
+   if (= y 1) then (numberOfDays (1,z))
+   else (add (numberOfDays (y,z)) (sumDays ((sub y 1),z))) ;
+
+(numberOfDays (1,x)) = 31
+(numberOfDays (2,x)) = if (leap_year x) then 29 else 28 ;
+(numberOfDays (3,x)) = 31
+(numberOfDays (4,x)) = 30
+(numberOfDays (5,x)) = 31
+(numberOfDays (6,x)) = 30
+(numberOfDays (7,x)) = 31
+(numberOfDays (8,x)) = 31
+(numberOfDays (9,x)) = 30
+(numberOfDays (10,x)) = 31
+(numberOfDays (11,x)) = 30
+(numberOfDays (12,x)) = 31
+
+(leap_year x) = if (= (mod x 4) 0) 
+                then if (= (mod x 100) 0) then (= (mod x 400) 0) else True
+                else False ;
+
+-- : (decode_day (whatday (1,11,2005)))
+@
+
+\section{Programming Tips}
+\begin{comment}
+To minimize the impact of the logic programming rules on efficiency, try
+to put code that can instantiate variables at the leftmost possible
+position. 
+For example, one should write
+\[ \mathit{setExists_1}\;p\;t = \exists x.((t\;x) \wedge (p\;x)) \]
+instead of
+\[ \mathit{setExists_1}\;p\;t = \exists x.((p\;x) \wedge (t\;x)). \]
+\end{comment}
+
+\begin{comment}
+\[ \lambda x.(\exists y.( 
+     ((\mathit{neighbours} (\mathit{Oxfordshire},y)) \vee 
+                           (\mathit{neighbours} (y, \mathit{Oxfordshire}))) 
+     \wedge (isin (x,y)) )) \]
+\begin{verbatim}
+-- Steps = 1176
+-- Final Answer: 
+--  \x.if (= x Salisbury) then True else if (= x Gloucester) then True
+--     else if (= x Cirencester) then True else (= x Cheltenham) 
+\end{verbatim}
+
+\[ \lambda x.(\exists y.((isin (x,y)) \wedge 
+        ((\mathit{neighbours} (\mathit{Oxfordshire},y)) \vee 
+                       (\mathit{neighbours} (y, \mathit{Oxfordshire}))) )) \]
+\begin{verbatim}
+-- Total candidate redexes tried = 91659
+-- Steps = 9447
+-- Final Answer: 
+--  \x.if (= x Salisbury) then True else if (= x Gloucester) then True
+--     else if (= x Cirencester) then True else (= x Cheltenham) 
+\end{verbatim}
+\end{comment}
+
+\begin{comment}
+The following definition would not work. Why?
+\begin{verbatim}
+    (fac 0) = 1
+    (fac n) = (mul (fac (sub n 1)) n)
+\end{verbatim}
+\end{comment}
+
+\begin{comment}
+This also wouldn't work properly (sometimes) for the same reason.
+\begin{verbatim}
+(smallest (# x [])) = x 
+(smallest (# x y)) = if (smaller2 x (smallest y)) then x else (smallest y)
+\end{verbatim}
+\end{comment}

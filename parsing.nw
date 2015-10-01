@@ -1,0 +1,1193 @@
+% -*- mode: Noweb; noweb-code-mode: c++-mode; c-basic-offset: 8; -*-
+
+\newpage
+\section{Parsing using Lex and Yacc}\label{sec:parsing}
+\subsection{Scanner}
+<<escher-scan.l>>=
+%{
+#include <iostream>
+#include <string.h>
+#include <stack>
+#include "terms.h"
+#include "unification.h"
+#include "y.tab.h"
+using namespace std;
+
+char linebuf[5000];
+int tokenpos = 0;
+int import_level = 0;
+bool quiet;
+bool interactive;
+%}
+<<flex options>>
+%x CMNT
+%%
+\{\-       BEGIN CMNT;
+<CMNT>.|\n ;
+<CMNT>\-\} BEGIN INITIAL;
+[\t ]+             { <<lex:tpos>> }
+\-\-.*             { // cout << "--\n"; 
+	             <<lex:tpos>> }
+\n.*               { <<lex error reporting hackery>> tokenpos = 0;}
+LastResort         { <<lex:tpos>> return LASTRESORT; }
+Cache              { <<lex:tpos>> return CACHE; }
+Eager              { <<lex:tpos>> return EAGER; }
+Persistent         { <<lex:tpos>> return PERSISTENT; }
+type               { <<lex:tpos>> return TYPE; }
+prove              { <<lex:tpos>> return PROVE; }
+KB                 { <<lex:tpos>> return KB; }
+Bool               { <<lex:tpos>> return BOOL; }
+Int                { <<lex:tpos>> return INT; }
+Float              { <<lex:tpos>> return FLOAT; }
+Char               { <<lex:tpos>> return CHAR; }
+String             { <<lex:tpos>> return STRING; }
+ListString         { <<lex:tpos>> return LISTRING; }
+\-\>               { <<lex:tpos>> return ARROW; }
+import             { <<lex:tpos>> return IMPORT; }
+quit               { <<lex:tpos>> return QUIT; }
+VAR                { <<lex:tpos>> return VAR; }
+CONST              { <<lex:tpos>> return CONST; }
+EQUAL              { <<lex:tpos>> return EQUAL; }
+NOTEQUAL           { <<lex:tpos>> return NOTEQUAL; }
+StrList            { <<lex:tpos>> return STRLIST; }
+add                { <<lex:tpos>> <<lex:copy yytext>>; return ADD; }
+sub                { <<lex:tpos>> <<lex:copy yytext>>; return SUB; }
+max                { <<lex:tpos>> <<lex:copy yytext>>; return MAX; }
+min                { <<lex:tpos>> <<lex:copy yytext>>; return MIN; }
+mul                { <<lex:tpos>> <<lex:copy yytext>>; return MUL; }
+div                { <<lex:tpos>> <<lex:copy yytext>>; return DIV; }
+mod                { <<lex:tpos>> <<lex:copy yytext>>; return MOD; }
+sin                { <<lex:tpos>> <<lex:copy yytext>>; return SIN; }
+cos                { <<lex:tpos>> <<lex:copy yytext>>; return COS; }
+sqrt               { <<lex:tpos>> <<lex:copy yytext>>; return SQRT; }
+exp                { <<lex:tpos>> <<lex:copy yytext>>; return EXP; }
+atan2              { <<lex:tpos>> <<lex:copy yytext>>; return ATAN2; }
+if                 { <<lex:tpos>> <<lex:copy yytext>>; return IF; }
+then               { <<lex:tpos>> <<lex:copy yytext>>; return THEN; }
+else               { <<lex:tpos>> <<lex:copy yytext>>; return ELSE; }
+ite                { <<lex:tpos>> <<lex:copy yytext>>; return ITE; }
+\&\&               { <<lex:tpos>> <<lex:copy yytext>>; return AND; }
+\|\|               { <<lex:tpos>> <<lex:copy yytext>>; return OR; }
+not                { <<lex:tpos>> <<lex:copy yytext>>; return NOT; }
+implies            { <<lex:tpos>> <<lex:copy yytext>>; return IMPLIES; }
+iff                { <<lex:tpos>> <<lex:copy yytext>>; return IFF; }
+sigma              { <<lex:tpos>> <<lex:copy yytext>>; return SIGMA; }
+pi                 { <<lex:tpos>> <<lex:copy yytext>>; return PI; }
+exists             { <<lex:tpos>> <<lex:copy yytext>>; return EXISTS; }
+forall             { <<lex:tpos>> <<lex:copy yytext>>; return FORALL; }
+box                { <<lex:tpos>> <<lex:copy yytext>>; return BOX; }
+\|\-               { <<lex:tpos>> <<lex:copy yytext>>; return TURNSTILE; }
+assign             { <<lex:tpos>> <<lex:copy yytext>>; return ASSIGN; }
+\=               { <<lex:tpos>> <<lex:copy yytext>>; return MYEQ; }
+\/\=               { <<lex:tpos>> <<lex:copy yytext>>; return MYNEQ; }
+\<\=               { <<lex:tpos>> <<lex:copy yytext>>; return MYLTE; }
+\<                 { <<lex:tpos>> <<lex:copy yytext>>; return MYLT; }
+\>\=               { <<lex:tpos>> <<lex:copy yytext>>; return MYGTE; }
+\>                 { <<lex:tpos>> <<lex:copy yytext>>; return MYGT; }
+True               { <<lex:tpos>> <<lex:copy yytext>>; return TRUE; }
+False              { <<lex:tpos>> <<lex:copy yytext>>; return FALSE; }
+\#                 { <<lex:tpos>> <<lex:copy yytext>>; return CONS;}
+\[\]               { <<lex:tpos>> <<lex:copy yytext>>; return EMPTYLIST;}
+-?[0-9]+           { <<lex:tpos>> yylval.numint = atoi(yytext); 
+                     return DATA_CONSTRUCTOR_INT; }
+-?[0-9]+\.[0-9]+   { <<lex:tpos>> yylval.num = atof(yytext); 
+                     return DATA_CONSTRUCTOR_FLOAT; }
+\'[^']\'           { <<lex:tpos>> <<lex:copy yytext>> 
+                     return DATA_CONSTRUCTOR_CHAR; /*'*/}
+\"[^"]*\"          { <<lex:tpos>> <<lex:copy yytext>> 
+                     return DATA_CONSTRUCTOR_STRING; /*"*/ }
+[a-zA-Z\/0-9\_\.\-]+\.es  { <<lex:tpos>> <<lex:copy yytext>>; return FILENAME; }
+\_                 { <<lex:tpos>> <<lex:copy yytext>>; return VARIABLE; }
+[a-z][0-9\_]*      { <<lex:tpos>> <<lex:copy yytext>>; return VARIABLE; }
+\:[a-z]+[0-9\_]*   { <<lex:tpos>> <<lex:copy yytext>>; return VARIABLE; }
+pv(e|t)[0-9]*      { <<lex:tpos>> <<lex:copy yytext>>; return VARIABLE; }
+[a-zA-Z][0-9]*\_SV { <<lex:tpos>> <<lex:copy yytext>>; return SYN_VARIABLE; }
+[a-z][a-zA-Z0-9\-\_\']* { <<lex:tpos>> <<lex:copy yytext>>; return IDENTIFIER1; }
+[A-Z][a-zA-Z0-9\-\_\']* { <<lex:tpos>> <<lex:copy yytext>>; return IDENTIFIER2; }
+.                     { <<lex:tpos>> return yytext[0]; }
+
+%%
+
+#define YY_NO_UNPUT 1 // suppose to get rid of warning message
+<<facilities for handling multiple input files>>
+@ 
+
+<<lex:copy yytext>>=
+yylval.name = new char[strlen(yytext)+1];
+strcpy(yylval.name, yytext);
+@ 
+
+\begin{comment}
+I learned this trick for achieving better error recovery from
+\cite[p. 246]{levine92lexyacc}. 
+The regular expression {\tt \\n.*} matches a newline and the next
+line, which is saved in {\tt linebuf} before being returned to the
+scanner by {\tt yyless}.
+The variable {\tt tokenpos} remembers the current position on the
+current line. 
+\end{comment}
+
+<<lex error reporting hackery>>=
+if (!quiet) cerr << "prompt> ";
+assert(strlen(yytext+1) <= 5000);
+strcpy(linebuf, yytext+1); yyless(1);
+@ 
+
+<<lex:tpos>>=
+tokenpos += yyleng;
+@ 
+
+<<yacc token definitions>>=
+%token IMPORT QUIT ARROW PROVE KB TYPE
+%token EAGER CACHE LASTRESORT PERSISTENT 
+%token DATA VAR CONST EQUAL NOTEQUAL BOX EXISTS FORALL TURNSTILE
+%token AND OR NOT IMPLIES IFF ADD SUB MAX MIN MUL DIV MOD SIN COS SQRT EXP ATAN2
+%token IF THEN ELSE ITE
+%token SIGMA PI MYLT MYLTE MYGT MYGTE MYEQ MYNEQ ASSIGN 
+%token TRUE FALSE CONS EMPTYLIST
+%token BOOL INT FLOAT CHAR STRING LISTRING STRLIST
+%token <name> FILENAME
+%token <name> VARIABLE
+%token <name> DATA_CONSTRUCTOR
+%token <numint> DATA_CONSTRUCTOR_INT
+%token <num> DATA_CONSTRUCTOR_FLOAT
+%token <name> DATA_CONSTRUCTOR_STRING
+%token <name> DATA_CONSTRUCTOR_CHAR
+%token <name> SYN_VARIABLE
+%token <name> IDENTIFIER1
+%token <name> IDENTIFIER2
+@ 
+
+\begin{comment}\label{com:nested imports}
+Escher allows nested import statements in program files.
+Unfortunately, we cannot simply switch input files every time we see
+an import statement to read from the correct file because flex
+scanners do a lot of buffering.
+That is to say, the next token comes from the buffer, not the file
+{\tt yyin}.
+
+The solution provided by flex is a mechanism to create and switch
+between input buffers, and this is what we used here.
+A stack of input buffers is used to handle multiply nested import
+statements. 
+Every time we see an import statement, we call {\tt switchBuffer} to
+push the current buffer onto stack, and then create a new buffer and
+switch to it.
+When we are done with the current buffer, the scanner will call 
+{\tt yywrap} to delete the existing buffer and then revert to the
+previous buffer stored on top of the stack.\\
+
+\noindent See, for more details on flex, \cite{paxson95}.
+\end{comment}
+
+<<facilities for handling multiple input files>>=
+stack<YY_BUFFER_STATE> import_stack;
+
+void switchBuffer(FILE * in) {
+        YY_BUFFER_STATE current = YY_CURRENT_BUFFER;
+        import_stack.push(current); 
+        // cout << "Switching to new file.\n";
+        YY_BUFFER_STATE newf = yy_create_buffer(in, YY_BUF_SIZE);
+        yy_switch_to_buffer(newf);
+        import_level++;
+}
+int yywrap() { 
+        import_level--;
+        cerr << "done "; if (import_level == 0) cerr << endl; 
+        if (import_level == 0 && interactive) quiet = false;
+        if (!quiet) cerr << "prompt> "; 
+        YY_BUFFER_STATE current = YY_CURRENT_BUFFER;
+        yy_delete_buffer(current);
+        if (import_stack.size()) {
+                yy_switch_to_buffer(import_stack.top());
+                import_stack.pop();
+                return 0;
+        }
+        return 1; 
+}
+int mywrap() { 
+        if (interactive) quiet = false;
+        if (!quiet) cerr << "prompt> "; 
+        // YY_BUFFER_STATE current = YY_CURRENT_BUFFER;
+        // yy_delete_buffer(current);
+        if (import_stack.size()) {
+                yy_switch_to_buffer(import_stack.top());
+                import_stack.pop();
+                return 0;
+        }
+        return 1; 
+}
+@ %def switchBuffer mywrap
+@ 
+
+\begin{comment}
+It forces input to be read one character at a time.
+The option {\tt yylineno} allows us to track down the line number
+of an offending command. 
+\end{comment}
+
+<<flex options>>=
+%option yylineno
+@ 
+
+\newpage
+\subsection{Parser}
+<<escher-parser.y>>=
+%{
+#include <iostream>
+#include <vector>
+#include <stack>
+#include "global.h"
+#include "io.h"
+#include "terms.h"
+#include "unification.h"
+#include "pattern-match.h"
+using namespace std;
+
+#define YYMAXDEPTH 50000
+
+extern int yylex(); extern FILE * yyin; 
+extern bool quiet; extern bool interactive;
+int mywrap();
+int yyparse();
+<<parser::function declarations>>
+<<parser::variables>>
+%}
+
+%union { char * name; int cname;
+         float num;
+         int numint;
+         term * trm;
+         type * c_type;
+         condition * cond;   }
+
+<<yacc token definitions>>
+%type <trm> term_schema
+%type <cond> sv_condition
+%type <c_type> type
+%type <name> dataconstructor
+%type <cname> functionsymbol
+%type <numint> stmt_ctrl_directive
+%%
+
+input : program_statements ;
+program_statements : /* empty */ | program_statements program_statement ;
+program_statement : import | type_info | statement_schema | query | quit ;
+
+<<parser::quit>>
+<<parser::import>>
+<<parser::query>>
+<<parser::type info>>
+<<parser::statement schema>>
+<<parser::term schema>>
+
+%%
+<<parser::error reporting>>
+<<escher main program>>                                                    
+@ 
+
+\begin{comment}
+Quiting is easy.
+We clean up the memory occupied by the program and then exit.
+\end{comment}
+
+<<parser::quit>>=
+quit : QUIT ';' { cout << "Quiting...\n"; cleanup(); exit(0); } ;
+@ 
+
+\begin{comment}
+We allow nested import statements.
+See Comment \ref{com:nested imports} on how this works.
+\end{comment}
+
+<<parser::import>>=
+import : IMPORT FILENAME ';'
+        { if (imported.find($2) == imported.end()) {
+            FILE * in = fopen($2, "r"); 
+            if (!in) { 
+                  cerr << "Error reading from " << $2 << endl; assert(false); }
+            quiet = true;
+            switchBuffer(in); cerr << "  Reading " << $2 << "...";
+            imported.insert($2);
+          } 
+	  // if (!quiet) cerr << "prompt> ";
+        }
+       ;
+@ 
+
+<<parser::variables>>=
+#include <set>
+set<string> imported;
+@ 
+       
+<<parser::function declarations>>=
+extern int switchBuffer(FILE * in);
+@ 
+
+\begin{comment}
+This is where a computation starts.
+\end{comment}
+
+<<parser::query>>=
+query : ':' term_schema ';'           { <<parser::perform a computation>> 
+	                                if (answer) answer->freememory(); }
+      | ':' term_schema '|' CACHE ';' { term * oquery = $2->clone();
+	                                <<parser::perform a computation>>
+                                        <<parser::cache computed result>> }
+      ;
+@ 
+
+\begin{comment}
+Given a query, we repeatedly simplify it using {\tt reduce} until
+nothing can be done anymore.
+If the end result is a data constructor, we print it.
+The variable {\tt tried} is the total number of redexes tried
+throughout the computation.
+\end{comment}
+
+<<parser::perform a computation>>=
+bool program_okay = typeCheck();
+type * ret = NULL;
+term * answer = NULL;
+if (program_okay && typecheck) ret = wellTyped($2); 
+if (program_okay) {
+	if (ret) delete_type(ret);
+	<<parser::query::output query>>
+	$2->reduceRpt();
+	answer = $2; //$
+	<<parser::query::output result>>
+} else {
+	cerr << "  Error: Query not evaluated.\n";
+	if (!quiet) cerr << "prompt> "; 
+}
+@ 
+
+\begin{comment}
+Here we form a statement from the original query and the answer obtained
+and insert that into the \texttt{cacheStatements} vector.
+\end{comment}
+
+<<parser::cache computed result>>=
+statementType * st = new statementType(); 
+term * head = oquery;
+term * body = answer;
+term * p = newT2Args(F, iEqual); p->initT2Args(head, body);
+st->stmt = p;
+<<parser::preprocess statements>>
+
+term * leftmost = head->spineTip(st->numargs);
+if (leftmost->isF()) {
+	st->anchor = leftmost->cname;
+	insert_ftable(leftmost->cname, st->numargs); }
+cachedStatements.push_back(st);
+@ 
+
+<<parser::query::output query>>=
+int osel = getSelector(); setSelector(STDOUT);
+ioprint("  Query: "); $2->print(); ioprintln(); /*$*/
+setSelector(osel);
+@ 
+
+<<parser::query::output result>>=
+// cout << "Total candidate redexes tried = " << tried << endl;
+int osel2 = getSelector(); setSelector(STDOUT);
+ioprint("Steps = "); ioprint(ltime);
+if (optimise) { ioprint(" ("); ioprint(cltime); ioprint(" cached step(s))"); }
+ioprint("\n  Answer: "); 
+answer->print(); ioprintln(" ;");
+setSelector(osel2);
+// answer->freememory();
+ltime = 0; cltime = 0;
+cerr << "prompt> ";
+@ 
+
+%% >>
+\begin{comment}
+We now move on to the parsing of Escher statements.
+Two different kinds of input are supported.
+We can accept a vanilla Escher statement with syntactic variables in it.
+We can also accept Bach input equations.
+System defined statements are used in Alkemy for other purposes.
+\end{comment}
+
+<<parser::statement schema>>=
+statement_schema : 
+         term_schema MYEQ term_schema ';'
+           { <<escher-parser::statement schema>> }
+       | term_schema MYEQ term_schema ';' stmt_ctrl_directive ';'
+           { <<escher-parser::statement schema>>
+	     <<statement schema::control directives>>
+	   }
+       ;
+
+stmt_ctrl_directive : EAGER { $$ = EAGER ; }
+                    | LASTRESORT { $$ = LASTRESORT; }
+                    | CACHE { $$ = CACHE; }
+                    | PERSISTENT { $$ = PERSISTENT; }
+                    ;
+@ 
+
+\begin{comment}
+In the case of Escher statements, we just put the head and the body
+together and do the necessary preprocessing.
+\end{comment}
+
+<<escher-parser::statement schema>>=
+statementType * st = new statementType(); 
+term * head = $1; term * body = $3;
+<<parser::make sure statement head has the right form>>
+st->stmt = newT2Args(F, iEqual); st->stmt->initT2Args(head, body);
+<<parser::preprocess statements>>
+insert_statement(st);
+@ 
+
+\begin{comment}\label{com:equation conditions}
+Here, we check that 
+\begin{enumerate}\itemsep1mm\parskip0mm
+ \item Every free variable appearing in the body also appears in the head. 
+   This is part of the type-weaker condition on statements.
+ \item Every free variable in the head appears exactly once.
+ \item Every lambda variable in the head is unique. 
+       This extra condition is needed to make sure the preprocessing code
+       behaves alright.
+\end{enumerate}
+\end{comment}
+
+<<parser::make sure statement head has the right form>>=
+term * leftmost = head->spineTip(st->numargs); //$
+assert(leftmost->isF());
+// make sure all free variables in body appears in the head
+// head->labelVariables(0); body->labelVariables(0);
+head->getFreeVars(); body->getFreeVars();
+
+for (int i=0; i!=body->frvarsize; i++) {
+        if (body->frvars[i] == -5) continue;
+        bool done = false;
+        for (int j=0; j!=$1->frvarsize; j++)
+                if (body->frvars[i] == head->frvars[j]) { 
+                        done = true; break; }
+        if (!done) {
+                setSelector(STDERR);
+                cerr << " *** Error parsing statement: "; 
+                head->print(); cerr << " = "; body->print(); cerr << endl;
+                cerr << "Variable " << getString(body->frvars[i]) << 
+                        " free in body but not free in head.\n";
+                assert(false);
+        }
+ }
+// make sure every free variable occurs only once in the head
+for (int i=0; i!=head->frvarsize; i++) {
+	if (head->frvars[i] == -5) continue;
+	if (head->frvars[i] == iWildcard) continue;
+	for (int j=i+1; j!=head->frvarsize; j++)
+		if (head->frvars[i] == head->frvars[j]) {
+			setSelector(STDERR);
+			cerr << " *** Error parsing statement: "; 
+			head->print(); cerr << " = "; body->print(); cerr<<endl;
+			cerr << "Variable " << head->frvars[i] << 
+				" occurs multiple times in head.\n";
+			assert(false);
+		}
+ }
+
+// make sure lambda variables in the head are unique
+multiset<int> lvars; head->collectLambdaVars(lvars);
+multiset<int>::iterator p = lvars.begin();
+while (p != lvars.end()) {
+	if (lvars.count(*p) > 1) {
+		setSelector(STDERR);
+		cerr << " *** Error parsing statement: ";
+		head->print(); cerr << " = "; body->print(); cerr<<endl;
+		cerr << "Lambda variable " << getString(*p) << 
+			" occurs multiple times in head.\n";
+		assert(false);
+	}
+	p++;
+}
+// everything is okay now
+st->anchor = leftmost->cname;
+insert_ftable(leftmost->cname, st->numargs);
+@ 
+
+\begin{comment}
+Here we perform different kinds of preprocessing on statements talked
+about in \S \ref{subsubsec:statement preprocessing} and other places.
+\end{comment}
+
+<<parser::preprocess statements>>=
+head->labelStaticBoundVars(); body->labelStaticBoundVars();
+st->stmt->collectSharedVars();
+head->collectFreeVars(st->stmt, 1);
+head->precomputeFreeVars();
+@ 
+
+\begin{comment}
+We have some control directives that can be used to control the evaluation
+order of Bach.
+
+We provide a mechanism to specify that certain statements should be
+evaluated in an eager fashion.
+The default Escher evaluation strategy is a lazy one: the leftmost
+outermost redex is picked at any step.
+The eager strategy stipulates that the leftmost innermost redex be
+picked at any step.
+Eager statements are processed in the same way as normal statements.
+We just set a tag to say the statement is eager.
+The {\tt try\_match\_n\_reduce} function will take this tag into
+account when doing computations.
+
+Some statements in the booleans module increase the length of the
+resulting term. 
+(This is usually the case for user-defined statements, but statements
+in the booleans module, in most cases, should not be like that.)
+We provide here a mechanism to delay the application of such
+statements as a last resort.
+
+We provide a control direction to specify that computations involving
+certain functions should be cached to improve efficiency.
+
+We need persistent objects in database applications.
+This is done by labelling certain statements as persistent.
+The RHS of a persistent statement can change during run-time.
+\end{comment}
+
+<<escher-parser::statement schema cache>>=
+<<escher-parser::statement schema>>
+cacheFuncs.insert(leftmost->cname);
+@ 
+
+<<statement schema::control directives>>=
+if ($5 == EAGER) st->eager = true;
+if ($5 == LASTRESORT) st->lastresort = true;
+if ($5 == PERSISTENT) st->persistent = true;
+if ($5 == CACHE) cacheFuncs.insert(leftmost->cname);
+@ 
+
+\begin{comment}
+In addition to side conditions on syntactic variables, we also have
+side conditions on the type of subterms residing in the head of
+statements. 
+This mechanism is designed to allow us to overload a function with
+definitions that are type dependent.
+For example, suppose we want to write a function
+$\it{card} \;:\; (a -> Bool) -> \it{Nat}$ to compute the cardinality
+of a given set.
+Depending on the actual type of $a$, we may have different definitions.
+For example, we may have 
+\begin{gather*}
+(\it{card}\;\lambda x.v) = (\it{card}\;(\it{enumerate2D}\; \lambda x.v))
+; \;\;\text{if $\lambda x.v : (a \times b) \rightarrow \varOmega$}\\
+(\it{card}\;\lambda x.v) = (\it{card}\;(\it{enumerate3D}\; \lambda x.v))
+; \;\;\text{if $\lambda x.v : (a \times b \times c) \rightarrow \varOmega$}
+\end{gather*}
+if we have different ways of enumerating sets of tuples.
+
+Here, we just add the type condition to the statement.
+This will be checked during pattern matching; see Comment
+\ref{com:pattern matching}.
+\end{comment}
+
+
+\begin{comment}
+We next look at term schemas.
+\end{comment}
+
+<<parser::term schema>>=
+term_schema : SYN_VARIABLE { $$ = new_term(SV, insert_symbol($1)); }
+            | SYN_VARIABLE sv_condition 
+                           { $$=new_term(SV, insert_symbol($1)); $$->cond = $2;}
+            | VARIABLE     { if ($1[0] == '_') 
+			          $$ = new_term(V, iWildcard); 
+	                     else $$ = new_term(V, insert_symbol($1)); }
+            | SIGMA        { $$ = new_term(F, iSigma); }
+            | PI           { $$ = new_term(F, iPi); }
+            | AND          { $$ = new_term(F, iAnd); }
+            | OR           { $$ = new_term(F, iOr); }
+            | NOT          { $$ = new_term(F, iNot); }
+            | IMPLIES      { $$ = new_term(F, iImplies); }
+            | ITE          { $$ = new_term(F, iIte); }
+            | IFF          { $$ = new_term(F, iIff); }
+            | ADD          { $$ = new_term(F, iAdd); }
+            | SUB          { $$ = new_term(F, iSub); }
+            | MAX          { $$ = new_term(F, iMax); }
+            | MIN          { $$ = new_term(F, iMin); }
+            | MUL          { $$ = new_term(F, iMul); }
+            | DIV          { $$ = new_term(F, iDiv); }
+            | MOD          { $$ = new_term(F, iMod); }
+            | SIN          { $$ = new_term(F, iSin); }
+            | COS          { $$ = new_term(F, iCos); }
+            | SQRT         { $$ = new_term(F, iSqrt); }
+            | EXP          { $$ = new_term(F, iExp); }
+            | ATAN2        { $$ = new_term(F, iAtan2); }
+            | MYLT         { $$ = new_term(F, iLT); }
+            | MYLTE        { $$ = new_term(F, iLTE); }
+            | MYGT         { $$ = new_term(F, iGT); }
+            | MYGTE        { $$ = new_term(F, iGTE); }
+            | MYEQ         { $$ = new_term(F, iEqual); }
+            | MYNEQ        { $$ = new_term(F, iNEqual); }
+            | ASSIGN       { $$ = new_term(F, iAssign); }
+            | TRUE         { $$ = new_term(D, iTrue); }
+            | FALSE        { $$ = new_term(D, iFalse); }
+            | CONS         { $$ = new_term(D, iHash); }
+            | EMPTYLIST    { $$ = new_term(D, iEmptyList); }
+            | DATA_CONSTRUCTOR_INT    { $$ = new_term_int($1); }
+            | DATA_CONSTRUCTOR_FLOAT  { $$ = new_term_float($1); }
+            | DATA_CONSTRUCTOR_CHAR   
+               { int code = insert_symbol($1); $$ = new_term(D, code); }
+            | <<term schema::strings>>
+            | IDENTIFIER1  { $$ = new_term(F, insert_symbol($1)); }
+            | IDENTIFIER2  { $$ = new_term(D, insert_symbol($1)); }
+            | '\\' VARIABLE '.' term_schema
+                  { $$ = new_term(ABS); 
+		    // $$->lc = new_term(V,insert_symbol($2));
+		    // $$->rc = $4;
+		    $$->insert(new_term(V,insert_symbol($2))); 
+		    $$->insert($4);
+		  }
+            | '\\' SYN_VARIABLE '.' term_schema
+                  { $$ = new_term(ABS); 
+		    // $$->lc = new_term(SV,insert_symbol($2));
+		    // $$->rc = $4;
+		    $$->insert(new_term(SV,insert_symbol($2))); 
+		    $$->insert($4);
+		  }
+            | <<term schema::if-then-else statements>> 
+            | <<term schema::existential statements>>
+            | <<term schema::universal statements>>
+            | BOX DATA_CONSTRUCTOR_INT term_schema 
+                   { $$ = new_term(MODAL); $$->modality = $2; 
+		     /* $$->lc = $3; */ $$->insert($3); }
+            | '(' term_schema term_schema ')'
+                   { $$ = new_term(APP); 
+		     // $$->lc = $2; $$->rc = $3;
+		     $$->insert($2); $$->insert($3); 
+		   }
+            | <<term schema::syntactic sugar>>
+            | '(' ')'   { $$ = new_term(PROD); }
+            | <<term schema::products>> 
+            | <<term schema::sets>>
+            | <<term schema::lists>>           
+            ;
+
+<<parser::term schemas>>
+<<parser::term schema products>>
+<<parser::sv condition>>
+@ 
+
+\begin{comment}
+We have two kinds of strings: the first kind atomic; the second,
+composite.
+An atomic string is a single data constructor; just like characters,
+one can only define equality function on atomic strings, nothing else.
+
+To define functions like substring that access the individual
+characters of a string, we need to represent a string as a composite
+object. 
+A natural thing to do here is to represent a string as a list of characters.
+An atomic string is written "This is a string".
+A composite string is written StrList "This is a string".
+\end{comment}
+
+<<term schema::strings>>=
+DATA_CONSTRUCTOR_STRING 
+{ int code = insert_symbol($1); strings.insert(code);
+  $$ = new_term(D, code); }
+| STRLIST DATA_CONSTRUCTOR_STRING  
+   { string x($2); int size = x.size();
+     term * elist = new_term(D, iEmptyList);
+     for (int i=size-2; i!=0; i--) {
+             term * temp = newT2Args(D, iHash);
+	     string character("'"); character += x[i]; character += "'";
+	     int code = insert_symbol(character); 
+	     temp->initT2Args(new_term(D, code), elist);
+	     elist = temp;
+     }
+     $$ = elist; /*$*/ }
+@ 
+
+\begin{comment}
+We provide syntactic sugar for writing if-then-else statements here.
+The function have the following signature:
+\[ {\it if-then-else} : \varOmega \times a \times a \rightarrow a. \]
+Note that the domain is a tuple -- this function should not be written
+in curried form.
+\end{comment}
+
+<<term schema::if-then-else statements>>=
+IF term_schema THEN term_schema ELSE term_schema 
+{ $$ = new_term(APP);
+  // $$->lc = new_term(F, iIte);
+  $$->insert(new_term(F, iIte));
+  term * temp = new_term(PROD);
+  /* temp->tuple = $2;
+  temp->tuple->next = $4;
+  temp->tuple->next->next = $6;
+  temp->tuple->next->next->next = NULL; */
+  temp->insert($2); temp->insert($4); temp->insert($6);
+  // $$->rc = temp;
+  $$->insert(temp);
+}
+@ 
+
+\begin{comment}
+We provide syntactic sugars for writing existentially and universally
+quantified statements in a natural way.
+\end{comment}
+
+<<term schema::existential statements>>=
+'\\' EXISTS VARIABLE '.' term_schema 
+   { $$ = new_term(APP); 
+     // $$->lc = new_term(F, iSigma);
+     $$->insert(new_term(F, iSigma));
+     term * abs = new_term(ABS);
+     // abs->lc = new_term(V, insert_symbol($3)); abs->rc = $5;
+     abs->insert(new_term(V, insert_symbol($3))); abs->insert($5);
+     // $$->rc = abs;
+     $$->insert(abs);   
+   }
+@ 
+
+<<term schema::universal statements>>=
+'\\' FORALL VARIABLE '.' term_schema 
+   { $$ = new_term(APP); 
+     // $$->lc = new_term(F, iPi);
+     $$->insert(new_term(F, iPi));
+     term * abs = new_term(ABS);
+     // abs->lc = new_term(V, insert_symbol($3)); abs->rc = $5;
+     abs->insert(new_term(V, insert_symbol($3))); abs->insert($5);
+     // $$->rc = abs;
+     $$->insert(abs);   
+   }
+@ 
+
+\begin{comment}
+There is a small language for imposing side conditions on syntactical
+variables. 
+See Comment \ref{com:sv constraints}.
+\end{comment}
+
+<<parser::sv condition>>=
+sv_condition : '/' VAR '/' { $$ = new condition; $$->tag = CVAR; }
+             | '/' CONST '/' { $$ = new condition; $$->tag = CCONST; }
+             | '/' EQUAL ',' SYN_VARIABLE '/'
+               { $$ = new condition; $$->tag = CEQUAL; 
+		 $$->svname = insert_symbol($4); }
+             | '/' NOTEQUAL ',' SYN_VARIABLE '/'
+               { $$ = new condition; $$->tag = CNOTEQUAL; 
+		 $$->svname = insert_symbol($4); }
+             ;
+@ 
+
+\begin{comment}
+A function applied to multiple arguments is painful to write.
+Here we introduce a syntactic sugar to allow users to write terms of
+the form $(f\;t_1\ldots t_n)$ to mean $(\cdots (f\;t_1) \cdots t_n)$.
+The following variable is needed to remember terms.
+\end{comment}
+
+<<parser::variables>>=
+vector<term *> temp_fields;
+@ 
+
+<<term schema::syntactic sugar>>=
+'(' term_schema term_schema term_schemas ')'
+        { $$ = new_term(APP);
+	  // $$->lc = $2; $$->rc = $3; 
+	  $$->insert($2); $$->insert($3);
+
+          int size = temp_fields.size(); int psize = 0;
+          while (temp_fields[size-1-psize] != NULL) psize++;
+
+          term * temp;
+          for (int i=size-psize; i!=size; i++) {
+                  temp = new_term(APP);
+		  // temp->lc = $$; temp->rc = temp_fields[i];
+                  temp->insert($$);
+                  temp->insert(temp_fields[i]);
+                  $$ = temp;
+          }
+          while (psize+1) { temp_fields.pop_back(); psize--; }
+        }
+@ 
+
+<<parser::term schemas>>=
+term_schemas : term_schema
+               { temp_fields.push_back(NULL); // start a new mult app
+                 temp_fields.push_back($1); }
+             | term_schemas term_schema
+               { temp_fields.push_back($2); }
+             ;
+@ 
+
+\begin{comment}
+Products are handled in about the same way, except that we do not have
+to construct application nodes.
+\end{comment}
+
+<<term schema::products>>=
+'(' term_schemas_product ')'
+        { $$ = new_term(PROD);
+          int size = temp_fields.size(); int psize = 0;
+          while (temp_fields[size-1-psize] != NULL) psize++;
+
+          for (int i=size-psize; i!=size; i++) {
+	      $$->insert(temp_fields[i]);
+          }      
+          while (psize+1) { temp_fields.pop_back(); psize--; }
+        }
+@ 
+
+<<parser::term schema products>>=
+term_schemas_product : term_schema
+                     { temp_fields.push_back(NULL); // start a new product
+                       temp_fields.push_back($1); }
+                     | term_schemas_product ',' term_schema
+                       { temp_fields.push_back($3); }
+                     ;
+@ 
+
+\begin{comment}
+We also provide syntactic sugar for extensional sets.
+\end{comment}
+
+<<term schema::sets>>=
+'{' '}' 
+     {  $$ = new_term(ABS); 
+        // $$->lc = new_term(V, newPVar());
+	// $$->rc = new_term(D, iFalse);
+        $$->insert(new_term(V, newPVar()));
+        $$->insert(new_term(D, iFalse)); 
+     }
+| '{' term_schemas_product '}'
+     {  int pv = newPVar();
+	$$ = new_term(ABS); $$->insert(new_term(V, pv));
+
+        term * arg2 = new_term(D, iFalse);
+        int i = temp_fields.size()-1;
+        while (temp_fields[i] != NULL) {
+		term * ite = new_term(APP);
+		ite->insert(new_term(F, iIte));
+		ite->insert(new_term(PROD));
+
+                term * eq = newT2Args(F, iEqual);
+                eq->initT2Args(new_term(V, pv), temp_fields[i]);
+
+		ite->fields[1]->insert(eq);
+		ite->fields[1]->insert(new_term(D, iTrue));
+		ite->fields[1]->insert(arg2); 
+
+                arg2 = ite;
+                i--;
+        }
+        $$->insert(arg2); // $
+        // setSelector(STDOUT); $$->print(); setSelector(SILENT);
+
+        int size = temp_fields.size(); int psize = 0;
+        while (temp_fields[size-1-psize] != NULL) psize++;      
+        while (psize+1) { temp_fields.pop_back(); psize--; }
+      } 
+@ 
+
+\begin{comment}
+In the good tradition of functional programmingm we provide syntactic
+sugar for lists as well. 
+\end{comment}
+
+<<term schema::lists>>=
+'[' ']' {}
+| '[' term_schemas_product ']' 
+    {   int tsize = temp_fields.size();
+        term * tail = newT2Args(D, iHash); 
+        tail->initT2Args(temp_fields[tsize-1], new_term(D, iEmptyList));
+        int i = tsize - 2;
+        while (temp_fields[i] != NULL) {
+                term * current = newT2Args(D, iHash);
+                current->initT2Args(temp_fields[i], tail);
+                tail = current;
+                i--;
+        }
+        $$ = tail;
+        int size = temp_fields.size(); int psize = 0;
+        while (temp_fields[size-1-psize] != NULL) psize++;      
+        while (psize+1) { temp_fields.pop_back(); psize--; }
+    }
+@ 
+
+\begin{comment}
+We need to declare the signature of every constant we use.
+This information is need for proper type checking of the program.
+\end{comment}
+
+<<parser::type info>>=
+type_info : functionsymbol ':' type ';'  { insert_constant($1, $3); }
+          | constructordecl
+          | syndecl
+          ;
+functionsymbol : IDENTIFIER1 { $$ = insert_symbol($1); } 
+            | SIGMA        { $$ = iSigma; }
+            | PI           { $$ = iPi; }
+            | AND          { $$ = iAnd; }
+            | OR           { $$ = iOr; }
+            | NOT          { $$ = iNot; }
+            | IMPLIES      { $$ = iImplies; }
+            | ITE          { $$ = iIte; }
+            | IFF          { $$ = iIff; }
+            | ADD          { $$ = iAdd; }
+            | SUB          { $$ = iSub; }
+            | MAX          { $$ = iMax; }
+            | MIN          { $$ = iMin; }
+            | MUL          { $$ = iMul; }
+            | DIV          { $$ = iDiv; }
+            | MOD          { $$ = iMod; }
+            | MYLT         { $$ = iLT; }
+            | MYLTE        { $$ = iLTE; }
+            | MYGT         { $$ = iGT; }
+            | MYGTE        { $$ = iGTE; }
+            | MYEQ         { $$ = iEqual; }
+            | MYNEQ        { $$ = iNEqual; }
+            | ASSIGN       { $$ = iAssign; }
+            | TRUE         { $$ = iTrue; }
+            | FALSE        { $$ = iFalse; }
+            | CONS         { $$ = iHash; }
+            | EMPTYLIST    { $$ = iEmptyList; }
+            ;
+@ 
+
+\begin{comment}
+A collection of data constructors with a common signature can be
+declared by listing them followed by their common signature.
+We need to insert the signature as a user-defined type here so that
+we can recognise it when we see it again later.
+Each data constructor together with its signature is recorded for
+later type checking use as well.
+\end{comment}
+
+<<parser::type info>>=
+constructordecl : dataconstructors ':' type ';' 
+                  { string tname($3->getName());
+                    type * t = new type_udefined(tname, vec_constants);
+                    if ($3->isUdefined())       
+                           insert_type(tname, UDEFINED, t);
+                    insert_constant(insert_symbol(vec_constants[0]), $3);
+                    for (unint i=1; i!=vec_constants.size(); i++)
+			    insert_constant(insert_symbol(vec_constants[i]), 
+					    $3->clone());
+                    vec_constants.clear();
+                    // if (!quiet) cerr << "prompt> "; 
+                  }
+                ;
+dataconstructors : dataconstructor  { vec_constants.push_back($1); }
+                 | dataconstructors ',' dataconstructor 
+                   { vec_constants.push_back($3); }
+                 ;
+dataconstructor : IDENTIFIER2 { $$ = $1; }
+                | DATA_CONSTRUCTOR { $$ = $1; }
+                ;
+@ 
+
+\begin{comment}
+We record the list of data constructors in this temporary vector.
+\end{comment}
+
+<<parser::variables>>=
+vector<string> vec_constants;
+
+<<parser::type info>>=
+syndecl : TYPE IDENTIFIER2 MYEQ type ';' 
+           { string t($2); insert_type(t,SYNONYM,$4); }
+        ;
+@ 
+
+\begin{comment}
+We now give the grammar for types. 
+The {\tt ->} function-forming operator is right associative; the {\tt *} 
+product-forming operator is left associative.
+
+There are six system-defined types: {\tt Bool}, {\tt Int}, {\tt Float}, 
+{\tt Char}, {\tt String} and {\tt ListString}. 
+The first five are atomic types.
+The type {\tt ListString} is translated into {\tt (List Char)} by the
+system.
+\end{comment}
+
+<<parser::type info>>=
+type : VARIABLE { string tname($1); $$ = new type_parameter(tname); }
+     | IDENTIFIER1 { string tname($1); $$ = new type_parameter(tname); }
+     | BOOL     { $$ = new type("Bool"); }
+     | INT      { $$ = new type("Int"); }
+     | FLOAT    { $$ = new type("Float"); } 
+     | CHAR     { $$ = new type("Char"); }
+     | STRING   { $$ = new type("String"); }
+     | LISTRING { $$ = new type_alg("List"); $$->addAlpha(new type("Char")); }
+     | IDENTIFIER2 
+        { string tname($1);
+          pair<int,type *> p = get_type(tname);
+          if (p.second == NULL) $$ = new type_udefined(tname);
+          else {  if (p.first == UDEFINED) $$ = p.second->clone();
+		  else $$ = new type_synonym(tname, p.second->clone()); }
+        }      
+     | '(' IDENTIFIER2 types ')' 
+        { string tname($2); 
+          type_tuple * rem = dcast<type_tuple *>(tempTuples.top());
+          tempTuples.pop(); 
+          $$ = new type_alg(tname, rem);
+          delete_type(rem); 
+        }
+     | '(' products ')' { $$ = tempTuples.top(); tempTuples.pop(); }
+     | type ARROW type { $$ = new type_abs($1, $3); }
+     | '(' type ')' { $$ = $2; }
+     ;
+
+products : products '*' type { tempTuples.top()->addAlpha($3); }
+         | type '*' type     { tempTuples.push(new type_tuple);
+	                       tempTuples.top()->addAlpha($1);
+			       tempTuples.top()->addAlpha($3);  }
+         ;
+types : type 
+         { tempTuples.push(new type_tuple); tempTuples.top()->addAlpha($1); }
+      | types type 
+         { tempTuples.top()->addAlpha($2); }
+      ;
+@ 
+
+<<parser::variables>>=
+stack<type *> tempTuples;
+
+<<yacc token definitions>>=
+%right ARROW
+%left '*'
+@ 
+
+\begin{comment}
+We may want to use the {\tt data} statement of Haskell for declaring
+data constructors in the future.
+There are some issues that need to be resolved first, however.
+
+An algebraic data type declaration in Haskell does not end with a
+delimiter.
+That is a bit strange because I need to put a delimiter (a semi-colon)
+to make the grammar unambiguous.
+The problem is related to the limitted lookahead mechanism of Yacc.
+Consider the following two statements.
+\begin{verbatim}
+  data List a = Nillist | Cons a (List a)
+  f x = 2 * x
+\end{verbatim}
+Yacc cannot tell whether {\tt f} is a parameter for {\tt Cons} or the
+start of another statement.
+It cannot know this until it sees the {\tt =} sign two tokens down the
+track. 
+
+The Haskell 98 report \cite{peyton-jones02} gives the following
+grammar for constructors:
+\[ \mathit{constr} \rightarrow \mathit{con}\; [!] \mathit{atype_1}
+          \ldots [!] \mathit{atype_k}. \]
+It is not clear to me what $[!]$ means here.
+Maybe that holds the key to proper parsing without the need for a
+delimiter. 
+\end{comment}
+
+<<parser::type info::unused>>=
+algebraic_type : "data" IDENTIFIER2 parameters MYEQ data_constructors ;
+
+parameters : /* nothing */ | parameters IDENTIFIER1 ;
+
+data_constructors : data_constructor
+                  | data_constructor '|' data_constructors ;
+data_constructor : IDENTIFIER2 brtypes ;
+
+brtypes : /* nothing */ | brtypes brtype ;
+
+brtype : IDENTIFIER1 | IDENTIFIER2 | '(' IDENTIFIER2 types ')' | '(' type ')' ;
+@ 
+
+\subsection{Escher Main Program}
+
+<<escher main program>>=
+#ifndef __APPLE__
+#ifndef __sun
+#include <getopt.h>
+#endif
+#endif
+
+#include <unistd.h>
+#include <signal.h>
+
+static void handle_signal(int sig) {
+	cout << "Interrupted....\n"; 
+	if (interrupted) { cleanup(); exit(1); }
+	interrupted = true; 
+}
+
+int main(int argc, char ** argv) {
+	interactive = false; quiet = true;
+        char c; 
+        while ((c = getopt(argc, argv, "vitobds")) != EOF) {
+                switch (c) { 
+                case 'v': verbose++; break;   
+                case 'i': interactive = true; break;
+		case 't': typecheck = false; break;
+                case 'o': optimise = true; break; 
+		case 'b': backchain = true; break;
+		case 'd': outermost = true; break;
+		case 's': stepByStep = true; break;
+                }
+        }
+        if (verbose) setSelector(STDOUT); else setSelector(SILENT);
+	makeHeap();
+        initFuncTable();
+        initialise_constants();
+
+	signal(SIGINT, handle_signal);
+  
+        logcache = fopen("log.cache", "r+"); assert(logcache);
+
+        if (interactive) cerr << "prompt> ";
+        do { yyparse(); } while (!feof(yyin));
+
+        fclose(logcache);
+
+        cleanup();
+        return 0;
+}
+@ 
+
+\begin{comment}
+Error reporting is not quite right yet.
+The line number reported is wrong because of nested imports.
+\end{comment}
+
+<<parser::variables>>=
+extern int yylineno; extern char * yytext; extern char linebuf[500]; 
+extern int tokenpos;
+@ 
+
+<<parser::function declarations>>=
+void yyerror(const char * s);
+@ 
+
+<<parser::error reporting>>=
+void yyerror(const char * s) {        
+        cerr << yylineno << ": " << s << " at " << yytext << " in this line\n";
+        cerr << linebuf << endl; 
+        for (int i=0; i!=tokenpos-1; i++) cerr << " ";
+        cerr << "^" << endl;
+        if (!quiet) cerr << "prompt> ";
+}
+@ 
+
+\begin{comment}
+This function frees the memory held by the program modules.
+\end{comment}
+
+<<parser::function declarations>>=
+void cleanup();
+@ %def cleanup
+
+<<escher main program>>=
+void cleanup() { 
+	cleanup_statements(); cleanup_formulas();
+	cleanup_constants(); cleanup_synonyms(); 
+	mem_report(); 
+}
+@ %def cleanup

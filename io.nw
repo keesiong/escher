@@ -1,0 +1,137 @@
+% -*- mode: Noweb; noweb-code-mode: c++-mode; c-basic-offset: 8; -*-
+
+\section{IO Facilities}
+
+\begin{comment}
+Silent printing is a useful trick I learned from \cite{knuth86tex}.
+\end{comment}
+
+<<io.h>>=
+#ifndef _IO_H_
+#define _IO_H_
+
+#include <string>
+#include <iostream>
+#include <fstream>
+#include <stdio.h>
+using namespace std;
+
+#define STDOUT 1
+#define STDERR 2
+#define SILENT 3
+#define EXFILE 4
+#define PIPE   5
+
+void initPipe();
+void closePipe();
+void setSelector(FILE * in);
+void setSelector(int x);
+int getSelector();
+
+void ioprint(const string & x);
+void ioprint(int x);
+void ioprint(long long int x);
+void ioprint(double x);
+void ioprint(char x);
+void ioprintln(const string & x);
+void ioprintln(int x);
+void ioprintln(long long int x);
+void ioprintln(double x);
+void ioprintln(char x);
+void ioprintln();
+
+#endif
+@ %def ioprint ioprintln setSelector getSelector
+
+<<io.cc>>=
+#include "io.h"
+
+ofstream bcpipe; 
+FILE * iofile;
+static int selector;
+ofstream logfile("log.complete");
+
+void initPipe() { bcpipe.open("pipe1"); bcpipe.setf(ios::fixed); }
+void closePipe() { bcpipe.close(); }
+void setSelector(FILE * in) { iofile = in; selector = EXFILE; }
+void setSelector(int x) { selector = x; }
+int getSelector() { return selector; }
+
+void ioprint(const string & x) { 
+	<<io::common print command>> <<io::file>> }
+void ioprint(int x) { 
+	<<io::common print command>> <<io::file 2>> }
+void ioprint(long long int x) { 
+	<<io::common print command>> <<io::file 2a>> }
+void ioprint(double x) { 
+	// cout.setf(ios::fixed, ios::floatfield); 
+	cout.setf(ios::showpoint); 
+	<<io::common print command>> <<io::file 3>> }
+void ioprint(char x) { 
+	<<io::common print command>> <<io::file 4>> }
+void ioprintln(const string & x) { 
+	<<io::common print command ln>> <<io::file>> }
+void ioprintln(int x) { 
+	<<io::common print command ln>> <<io::file 2>> }
+void ioprintln(long long int x) { 
+	<<io::common print command ln>> <<io::file 2a>> }
+void ioprintln(double x) { 
+	//cout.setf(ios::fixed, ios::floatfield); 
+	cout.setf(ios::showpoint); 
+	<<io::common print command ln>> <<io::file 3>> }
+void ioprintln(char x) { 
+	<<io::common print command ln>> <<io::file 4>> }
+void ioprintln() {
+#ifdef DEBUG
+        logfile << endl;
+#endif
+        if (selector == SILENT) return;
+        else if (selector == STDOUT) cout << endl;
+	else if (selector == EXFILE) fprintf(iofile, "\n");
+	else if (selector == PIPE) bcpipe << endl;
+        else cerr << endl;
+}
+@ %def ioprint ioprintln setSelector getSelector
+
+<<io::common print command>>=
+// #define DEBUG
+#ifdef DEBUG
+logfile << x;
+#endif
+if (selector == SILENT) return;
+if (selector == STDOUT) cout << x;
+if (selector == STDERR) cerr << x;
+else if (selector == PIPE) bcpipe << x;
+@ 
+
+<<io::common print command ln>>=
+#ifdef DEBUG
+logfile << x << endl;
+#endif
+if (selector == SILENT) return;
+if (selector == STDOUT) cout << x << endl;
+if (selector == STDERR) cerr << x << endl;
+else if (selector == PIPE) bcpipe << x << endl;
+@ 
+
+<<io::file>>=
+if (selector == EXFILE) fprintf(iofile, x.c_str());
+@ 
+
+<<io::file 2>>=
+if (selector == EXFILE) fprintf(iofile, "%d", x);
+@ 
+
+<<io::file 2a>>=
+if (selector == EXFILE) fprintf(iofile, "%lld", x);
+@ 
+
+<<io::file 3>>=
+if (selector == EXFILE) fprintf(iofile, "%f", x);
+@ 
+
+<<io::file 4>>=
+if (selector == EXFILE) fprintf(iofile, "%c", x);
+@ 
+
+

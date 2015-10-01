@@ -1,0 +1,4070 @@
+% -*- mode: Noweb; noweb-code-mode: c++-mode; c-basic-offset: 8; -*-
+
+\section{Terms}
+
+\subsection{Term Representation}
+\begin{comment}
+We use a standard approach to represent terms.
+A term is a graph of nodes, where each node is a term-schema as defined.
+One possible optimization is to distinguish between boxed and unboxed
+fields \cite[pg. 190]{peyton-jones87}. 
+For a discussion on term representations, see
+\cite[Chap. 10]{peyton-jones87}.
+\end{comment}
+
+\begin{comment}
+A term schema can be any one of the following: a syntactical variable
+(SV), a variable (V), a function symbol (F), a data constructor (D),
+an application (APP), an abstraction (ABS), a product (PROD) or a
+modal term (MOD).
+This information is recorded in {\tt tag}.
+\end{comment}
+
+<<term::type defs>>=
+enum kind { SV, V, F, D, APP, ABS, PROD, MODAL };
+
+<<term parts>>=
+kind tag;
+@ 
+
+\begin{comment}
+Syntactic variables, variables, functions and data constructors have names.
+For efficiency considerations, we use integers to represent names.
+(See Comment \ref{com:symbols and integers} for the mappings.)
+Modal terms have indices.
+\end{comment}
+
+<<term parts>>=
+int cname;
+char modality;
+type * ptype;
+
+<<term init>>=
+cname = -5;
+modality = -5;
+ptype = NULL;
+
+<<heap term init>>=
+ret->cname = -5;
+ret->modality = -5;
+ret->ptype = NULL;
+
+<<term clone parts>>=
+ret->cname = cname;
+if (tag == MODAL) ret->modality = modality;
+// if (ptype) ret->ptype = ptype->clone();
+
+<<term replace parts>>=
+cname = t->cname;
+if (t->tag == MODAL) modality = t->modality; 
+// if (t->ptype) ptype = t->ptype->clone();
+@ 
+
+\begin{comment}
+Terms with names are called atomic terms.\index{atomic terms}
+Terms that does not have names are called composite
+terms.\index{composite terms}
+\end{comment}
+
+<<term::function declarations>>=
+bool isF() { return (tag == F); }
+bool isF(int code) { return (tag == F && cname == code); }
+bool isApp() { return (tag == APP); }
+bool isD() { return (tag == D); }
+bool isD(int code) { return (tag == D && cname == code); }
+bool isVar() { return (tag == V); }
+bool isVar(int v) { return (tag == V && cname == v); }
+bool isAbs() { return (tag == ABS); }
+bool isProd() { return (tag == PROD); }
+bool isModal() { return (tag == MODAL); }
+@ %def isF isApp isD isVar isAbs isProd isModal
+
+\begin{comment}
+The parameters {\tt tag} and {\tt kind} does not have default values.
+They are initialized in the constructor code with pass-in values.
+\end{comment}
+
+\begin{comment}
+Application, abstraction and product terms have subterms.
+These are captured in the vector {\tt fields}.
+\end{comment}
+
+<<term vector parts>>=
+// vector<term *> fields;
+term * fields[10];
+unint fieldsize;
+
+<<term init>>=
+fieldsize = 0;
+
+<<heap term init>>=
+ret->fieldsize = 0;
+
+<<term::function declarations>>=
+
+term * lc() { /*assert(tag == APP);*/ return fields[0]; }
+term * rc() { /*assert(tag == APP);*/ return fields[1]; }
+
+void insert(term * t) {
+    fields[fieldsize] = t; fieldsize++;
+    if (fieldsize > 10) assert(false);
+}
+@ %def lc rc insert
+
+
+\begin{comment}
+Certain basic data constructors like numbers can best be dealt with in
+their original machine representations.
+(Otherwise, a lot of conversions from and to strings are needed.)
+The variable {\tt num} replaces the {\tt cname} field for numbers.
+
+Cloning of {\tt isfloat}, {\tt isint}, {\tt numi} and {\tt numf} is
+done in the {\tt clone()} procedure.
+We do not have to worry about them here.
+\end{comment}
+
+<<term bool parts>>=
+bool isfloat, isint;
+
+<<term parts>>=
+long long int numi; 
+double numf;
+
+<<term init>>=
+isfloat = false; isint = false;
+
+<<heap term init>>=
+ret->isfloat = false; ret->isint = false;
+
+<<term replace parts>>=
+if (t->tag == D) { isfloat = t->isfloat; isint = t->isint; 
+                   numi = t->numi; numf = t->numf;  }
+@ 
+
+\begin{comment}
+Sometimes we want to prevent a certain subterm from being modified.
+This is done by setting a {\tt freeze} flag.
+\end{comment}
+
+<<term bool parts>>=
+bool freeze;
+@ %def freeze
+
+<<term init>>=
+freeze = false;
+
+<<heap term init>>=
+ret->freeze = false;
+
+<<term replace parts>>=
+freeze = t->freeze;
+@ 
+
+\begin{comment}
+A term of the form $(t_1\;(t_2\cdots (t_{n-1} \;t_n)\cdots ))$ can be
+visualized to take on the shape of a spine. (Draw it!)
+The (leftmost) term $t_1$ is called the tip of the spine.
+At different places throughout a computation, we need to access the
+leftmost term in a nested application node, and the following two
+functions provide this service.
+The input {\tt x} to the second function will get assigned the value $n-1$.
+We currently perform a (linear) traversal down the spine.
+It is possible to make this go faster if necessary.
+
+We cache the results in {\tt spinetip} and {\tt spinelength}.
+\end{comment}
+
+<<term parts>>=
+term * spinetip;
+int spinelength;
+int spine_time;
+
+<<term init>>=
+spinetip = NULL; spinelength = -1; spine_time = -5;
+@ 
+
+<<heap term init>>=
+ret->spinetip = NULL; ret->spinelength = -1; ret->spine_time = -5;
+@ 
+
+\begin{comment}
+All these values become obsolete on replacing.
+\end{comment}
+
+<<term replace parts>>=
+spinetip = NULL; spinelength = -1; spine_time = -5;
+@ 
+
+<<term::function definitions>>=
+term * term::spineTip() {
+	if (spinetip && spinelength > -1 && spine_time ==ltime) return spinetip;
+	spine_time = ltime; 
+        if (tag != APP) { spinetip = this; spinelength = 1; return spinetip; }
+        spinelength = 2; spinetip = fields[0]; 
+        while (spinetip->isApp())  
+		{ spinetip = spinetip->fields[0]; spinelength++; } 
+        return spinetip;
+}
+term * term::spineTip(int & numarg) {
+        if (tag != APP) { numarg = 0; return this; }
+        numarg = 1; term * p = fields[0];
+        while (p->isApp()) { p = p->fields[0]; numarg++; }
+        return p;
+}
+@ %def spineTip
+
+\begin{comment}
+The following function checks whether the current term has the general
+form $((f \; t_1) \; t_2)$, where $f$ is given as input.
+If {\tt spinetip} has already been computed, we can do things slightly
+faster.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::isFunc2Args() {
+	if (spinetip && spinelength == 3 && spinetip->isF()) return true;
+        return (isApp() && lc()->isApp() && lc()->lc()->isF());
+}
+bool term::isFunc2Args(int f) {
+	if (spinetip && spinelength == 3 && spinetip->isF(f)) return true;
+        return (isApp() && lc()->isApp() && lc()->lc()->isF(f));
+}
+@ %def isFunc2Args
+
+\begin{comment}
+This function checks whether a term is a string.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::isAString() {
+	return (isApp() && lc()->isApp() && lc()->lc()->isD(iHash) 
+                && lc()->rc()->isChar());
+}
+bool term::isChar() {
+	if (isfloat || isint) return false;
+	return (tag == D && cname >= 2000 && cname < 3000);
+}
+bool term::isString() {
+	if (isfloat || isint) return false;
+	return (tag == D && strings.find(cname) != strings.end());
+}
+@ %def isChar isAString isString
+
+\begin{comment}
+Constants that are rigid have the same meaning in each possible world.
+A term is rigid if every constant in it is rigid.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::isRigid() {
+	if (tag == V || tag == D) return true;
+	if (tag == F) return is_rigid_constant(cname);
+	if (tag == ABS) return fields[1]->isRigid();
+	if (tag == MODAL) return fields[0]->isRigid();
+	assert(tag == PROD || tag == APP);
+	for (unint i=0; i!=fieldsize; i++) 
+		if (!fields[i]->isRigid()) return false;
+	return true;
+}
+@ 
+
+\begin{comment}
+The following function creates a new term having the form 
+$((f\; t_1) \;t_2)$ where $f$ (given) is a function symbol of arity two.
+The arguments $t_1$ and $t_2$ needs to be initialized by the calling
+function. 
+\end{comment}
+
+<<terms.cc::local functions>>=
+term * newT2Args(kind k, int f) {
+        term * ret = new_term(APP);
+        ret->insert(new_term(APP)); ret->lc()->insert(new_term(k, f));
+        return ret;
+}
+@ %def newT2Args
+
+\begin{comment}
+The following function initializes the two arguments of a term created
+using {\tt newT2Args}.
+\end{comment}
+
+<<term::function declarations>>=
+void initT2Args(term * t1, term * t2) { 
+     lc()->insert(t1); insert(t2); 
+}
+@ %def initT2Args
+
+\begin{comment}
+The following function checks whether two terms are equal to each other.
+This is currently only used in debugging code.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::equal(term * t) {
+        if (tag != t->tag) return false;
+        if (cname != t->cname) return false;
+        if (modality != t->modality) return false;
+        <<term schema::equal::numbers>>
+	// unint size1 = fieldsize;
+        // unint size2 = t->fieldsize;
+        if (fieldsize != t->fieldsize) return false;
+        for (unint i=0; i!=fieldsize; i++)
+                if (fields[i]->equal(t->fields[i]) == false)
+                        return false;
+        return true;
+}
+@ %def equal
+
+\begin{comment}
+We treat numbers in a slightly peculiar way. 
+We will equate an integer and a floating-point number (even though the
+types do not agree) if they are the same number.
+We do this because the internal arithmetic of Escher can add,
+subtract, multiply and divide integers and floating-point numbers to
+produce another floating-point number.
+See Comment \ref{com:arithmetic}.
+\end{comment}
+
+<<term schema::equal::numbers>>=
+if (isint && t->isint && numi != t->numi) return false;
+if (isint && t->isfloat && (double)numi != t->numf) return false;
+if (isfloat && t->isint && numf != (double)t->numi) return false;
+if (isfloat && t->isfloat && numf != t->numf) return false;
+@ 
+
+\begin{comment}
+This is used for marking and printing redexes.
+\end{comment}
+
+<<term bool parts>>=
+bool redex;
+
+<<term init>>=
+redex = false;
+@ 
+
+<<heap term init>>=
+ret->redex = false;
+@ 
+
+\begin{comment}
+The variable {\tt redex} does not really play a part during cloning and reusing.
+\end{comment}
+
+\begin{comment}
+A term is printed in the way it is represented.
+The redex (if one exists) is marked out using square brackets.
+Shared nodes are also marked with their reference count.
+\end{comment}
+
+<<term::function definitions>>=
+extern const string pve;
+void term::print() {
+        if (getSelector() == SILENT) return;
+	<<term schema::print strings>>
+	<<term schema::print lists>>
+        if (redex) ioprint(" [[[ ");
+        <<term schema::print if-then-else>>
+        // if (refcount > 1) ioprint("_s_");
+	if (cname >= 5000) { ioprint(pve); ioprint(cname - 5000); }
+	else if (cname > 0) ioprint(getString(cname));
+        else if (isfloat) ioprint(numf);
+	else if (isint) ioprint(numi);
+	else if (isFunc2Args()) {
+		ioprint("("); lc()->lc()->print(); ioprint(" ");
+		lc()->rc()->print(); ioprint(" "); rc()->print(); ioprint(")");
+	} else if (tag == APP && (lc()->isF(iSigma) || lc()->isF(iPi))) {
+		if (lc()->isF(iSigma)) ioprint("\\exists ");
+		else ioprint("\\forall ");
+		rc()->fields[0]->print(); ioprint(".");
+		rc()->fields[1]->print(); 
+        } else if (tag == APP) {
+		ioprint("("); fields[0]->print(); ioprint(" ");
+                fields[1]->print(); ioprint(")"); 
+        } else if (tag == ABS) {
+                ioprint("\\"); fields[0]->print(); 
+		ioprint("."); fields[1]->print();
+        } else if (tag == PROD) {
+                int size = fieldsize;
+                if (size == 0) { ioprint("()"); return; }
+                ioprint("(");
+                for (int i=0; i!=size-1; i++) 
+                      { fields[i]->print(); ioprint(","); }
+                fields[size-1]->print(); ioprint(")");
+        } else if (tag == MODAL) {
+                ioprint("["); ioprint(modality); ioprint("] ");
+		fields[0]->print(); 
+        } else { <<print error handling>> }
+        if (redex) ioprint(" ]]] ");
+}
+@
+
+\begin{comment}
+(Composite) strings are represented as lists of characters. 
+Printing them as lists is not good for the eyes.
+What we do here is to collect the characters together and print a
+string as a string.
+\end{comment}
+
+<<term schema::print strings>>=
+if (isAString()) {
+	string temp = ""; temp += getString(lc()->rc()->cname)[1];
+	term * arg2 = rc();
+	while (!arg2->isD(iEmptyList)) {
+		assert(arg2->lc()->rc()->isChar());
+		temp += getString(arg2->lc()->rc()->cname)[1];
+		arg2 = arg2->rc();
+	}
+	ioprint("\""); ioprint(temp); ioprint("\""); return;
+}
+@ 
+
+\begin{comment}
+We print a list in the syntactic sugar form.
+\end{comment}
+
+<<term schema::print lists>>=
+if (isApp() && lc()->isApp() && lc()->lc()->isD(iHash)) {
+	ioprint("["); lc()->rc()->print();
+	term * arg2 = rc();
+	while (arg2->isD(iEmptyList) == false) {
+		ioprint(", ");
+		if (arg2->isApp() && arg2->lc()->isApp() && 
+		    arg2->lc()->lc()->isD(iHash)) 
+			{ arg2->lc()->rc()->print(); arg2 = arg2->rc(); }
+		else { arg2->print(); break; }
+	}
+	ioprint("]");
+	return;
+}
+@ 
+
+\begin{comment}
+We print if-then-else statements in a more human-readable form here.
+\end{comment}
+
+<<term schema::print if-then-else>>=
+if (isApp() && lc()->cname == iIte) { 
+	ioprint("if "); rc()->fields[0]->print();
+	ioprint(" then "); rc()->fields[1]->print();
+	/* ioprint("\n\t");*/ ioprint(" else "); rc()->fields[2]->print();
+	return;
+}
+@ 
+
+<<print error handling>>=
+cerr << "Printing untagged term.\ttag = " << tag << endl;
+assert(false);
+@ 
+
+\begin{comment}
+In vertical printing, we print the current term vertically (with some
+indentation). 
+Miscellaneous information about the individual subterms are also printed.
+This is a convenient way to look at sharing and other information 
+associated with each node.
+\end{comment}
+
+<<term::function definitions>>=
+void term::printVertical(unint level) {
+        if (getSelector() == SILENT) return;
+        <<print white spaces>>
+	if (cname >= 5000) { ioprint(pve); ioprint(cname-5000); }
+        else if (cname > 0) 
+                { ioprint(getString(cname)); <<print extra information>> }
+        else if (isfloat) { ioprint(numf);  <<print extra information>> }
+	else if (isint) { ioprint(numi);  <<print extra information>> }
+        else if (tag == APP) {
+                ioprint("("); <<print extra information>>
+                fields[0]->printVertical(level+1);
+                fields[1]->printVertical(level+1);
+                <<print white spaces>> ioprint(")\n");
+        } else if (tag == ABS) {
+                ioprint("\\"); fields[0]->print(); ioprint("."); 
+                <<print extra information>>
+                fields[1]->printVertical(level+1);
+        } else if (tag == PROD) {
+                int size = fieldsize;
+                if (size == 0) 
+                      { ioprint("()"); <<print extra information>> return; }
+                ioprint("("); <<print extra information>>
+                for (int i=0; i!=size-1; i++) {
+                        fields[i]->printVertical(level+1); ioprint(",\n"); }
+                fields[size-1]->printVertical(level+1);
+                <<print white spaces>> ioprint(")\n");
+        } else if (tag == MODAL) {
+                assert(false);
+        } else { <<print error handling>> }
+}
+@ %def printVertical
+
+<<print white spaces>>=
+for (unint i=0; i!=level; i++) ioprint(" ");
+
+<<print extra information>>=
+ioprint("\t\t");
+if (refcount > 1) { ioprint("shared"); ioprint(refcount); }
+ioprintln();
+@ 
+
+\subsubsection{Constraints for Syntactic Variables}
+
+\begin{comment}\label{com:sv constraints}
+We have a (limited) syntax for specifying constraints on what sort of
+terms a syntactical variable can range over.
+(See the grammar for Escher.)
+Four types of constraints are supported at present.
+The constraint CVAR forces a syntactical variable to range over
+variables only; CCONST forces a syntactical variable to range over
+constants only. 
+The constraint CEQUAL dictates that the value of one syntactical variable
+must be equal to the value of one other;
+The constraint CNOTEQUAL dictates that the value of one syntactical
+variable must not be equal to the value of one other.
+For details on how these constraints are implemented, see 
+Comment \ref{com:redex matching sv}.
+\end{comment}
+
+<<term::definitions>>=
+#define CVAR 1
+#define CCONST 2
+#define CEQUAL 3 
+#define CNOTEQUAL 4 
+@ 
+
+<<term::supporting types>>=
+struct condition { int tag; int svname; };
+
+<<term parts>>=
+condition * cond; // only applies to SV 
+
+<<term init>>=
+cond = NULL;
+
+<<heap term init>>=
+ret->cond = NULL;
+
+<<term clone parts>>=
+if (cond) { assert(tag == SV); 
+            ret->cond = new condition;
+            ret->cond->svname = cond->svname; ret->cond->tag = cond->tag; }
+
+<<term replace parts>>=
+if (cond) delete cond;
+cond = t->cond;
+@ 
+
+\newpage
+\subsection{Memory Management}
+\begin{comment}
+We look at some memory management issues in this section.
+A naive scheme relying on {\tt new} and {\tt delete} is in use at the
+moment. 
+It is not clear to the author whether a separate heap-allocating
+scheme would make the system go a whole lot faster.
+\end{comment}
+
+\begin{comment}
+We put wrappers around {\tt new} and {\tt delete} to collect some
+statistics.
+The procedure {\tt mem\_report} shows the total number of terms
+allocated and subsequently freed.
+This is used to check whether there is a memory leak. 
+\end{comment}
+
+<<term::memory management>>=
+extern void makeHeap();
+extern term * new_term(kind k);
+extern term * new_term(kind k, int code);
+extern term * new_term_int(int x);
+extern term * new_term_int(long long int x);
+extern term * new_term_float(float x);
+extern void mem_report();
+@ 
+
+<<terms.cc::local functions>>=
+#ifdef DEBUG_MEM
+static long int allocated = 0;
+static long int freed = 0;
+#endif
+
+#define HEAPSIZE 100000
+term heap[HEAPSIZE];
+term * avail;
+
+void makeHeap() {
+    // cout << "Sizeof(term) = " << sizeof(term) << endl;
+    // cout << "Sizeof(char) = " << sizeof(char) << endl;
+    // cout << "Sizeof(short) = " << sizeof(short) << endl;     
+    // cout << "Sizeof(int) = " << sizeof(int) << endl;
+    // cout << "Sizeof(bool) = " << sizeof(bool) << endl;
+    avail = heap;
+    for (int i=0; i!=HEAPSIZE-1; i++) {
+	heap[i].next = &(heap[i+1]);
+    }
+    heap[HEAPSIZE-1].next = NULL;
+}
+
+term * myalloc() {
+    if (avail == NULL) assert(false);
+    term * ret = avail; avail = avail->next; 
+    <<heap term init>> 
+    return ret;
+}
+inline void mydealloc(term * p) { p->next = avail; avail = p; }
+@
+
+<<terms.cc::local functions>>=
+term * new_term(kind k) {
+     term * ret = myalloc(); ret->tag = k; 
+     return ret;
+}
+
+term * new_term(kind k, int code) {
+     term * ret = myalloc(); 
+     ret->tag = k; 
+     ret->cname = code;
+     return ret;
+}
+
+term * new_term_int(int x) {
+    term * ret = myalloc();
+    ret->tag = D; 
+    ret->isint = true; ret->numi = x; return ret;
+}
+
+term * new_term_int(long long int x) {
+    term * ret = myalloc();
+    ret->tag = D; 
+    ret->isint = true; ret->numi = x; return ret;
+}
+
+term * new_term_float(float x) {
+     term * ret = myalloc();
+     ret->tag = D;
+     ret->isfloat = true; ret->numf = x; return ret;
+}
+@ %def new_term new_term_int new_term_float
+
+<<terms.cc::local functions>>=
+inline void delete_term(term * x) { mydealloc(x); }
+
+void mem_report() {
+#ifdef DEBUG_MEM
+        cout << "\n\nReport from Memory Manager:\n";
+        cout << "\tAllocated " << allocated << endl;
+        cout << "\tFreed " << freed << endl;
+        cout << "\tUnaccounted " << allocated - freed << endl << endl;
+#endif
+} // >>
+@ %def delete_term mem_report
+
+\begin{comment}\label{com:cloning of shared nodes}
+Cloning of a term with shared nodes will result in an identical term
+without shared nodes.
+\end{comment}
+
+<<term::function definitions>>=
+term * term::clone() {
+        term * ret;
+        if (isfloat) ret = new_term_float(numf);
+        else if (isint) ret = new_term_int(numi);
+        else if (tag >= SV && tag <= D) ret = new_term(tag, cname);
+        else ret = new_term(tag);
+        <<term clone parts>>
+                  
+        int size = fieldsize;
+        for (int i=0; i!=size; i++) ret->insert(fields[i]->clone());
+        return ret;
+}
+@ 
+
+\begin{comment}
+We explicitly free memory instead of relying on destructors.
+The function freememory must take node sharing into account.
+A term is in use while its reference count is still non-zero.
+\end{comment}
+
+<<term::function definitions>>=
+/*
+void term::freememory() {
+        refcount--;
+        <<freememory error checking>>
+        if (refcount != 0) return;
+	if (ptype) { delete_type(ptype); }
+        if (cond) delete cond; 
+        int size = fieldsize;
+        for (int i=0; i!=size; i++) if (fields[i]) fields[i]->freememory();
+	fieldsize = 0;
+        delete_term(this);
+}
+*/
+void term::freememory() {
+        refcount--;
+        <<freememory error checking>>
+        if (refcount != 0) return;
+	
+	term * p = this;
+	delete_term(this);
+
+	if (p->ptype) delete_type(p->ptype);
+        if (p->cond) delete p->cond; 
+
+        int size = p->fieldsize;
+        for (int i=0; i!=size; i++) 
+	    if (p->fields[i]) p->fields[i]->freememory();
+	p->fieldsize = 0;
+}
+
+@ 
+
+<<freememory error checking>>= 
+// if (refcount < 0) { setSelector(STDERR); print(); ioprintln();
+//	            ioprint("refcount = "); ioprintln(refcount); }
+assert(refcount >= 0);
+@ 
+
+\begin{comment}
+This function overwrites the root of the current term with the input term $t$.
+We need to do this if the current node is shared (see 
+\S \ref{subsec:node sharing}) or when the current
+term is the root term (with no parent).
+The procedure is simple.
+The information on the root of $t$ is copied, and all the child nodes
+of $t$ are reused.
+We first {\tt reuse} the child nodes of {\tt t} because we could be
+replacing the current term with its children, in which case {\tt t}
+can get deleted before we can reuse its child nodes if we are not
+careful.
+\end{comment}
+
+<<term::function definitions>>=
+void term::replace(term * t) {
+        tag = t->tag;
+        <<term replace parts>>
+        int tsize = t->fieldsize;
+        for (int i=0; i!=tsize; i++) t->fields[i]->reuse();
+        
+        int size = fieldsize;
+        for (int i=0; i!=size; i++) if (fields[i]) fields[i]->freememory();
+        // fields.resize(tsize);
+	// copy(t->fields.begin(), t->fields.end(), fields.begin());
+	fieldsize = t->fieldsize;
+	for (int i=0; i!=tsize; i++)
+	    fields[i] = t->fields[i];
+}
+@ %def replace
+
+\newpage
+\subsection{Sharing of Nodes}\label{subsec:node sharing}
+\begin{comment}
+We use reference counting to implement sharing of nodes.
+\end{comment}
+
+<<term parts>>=
+int refcount;
+
+<<term init>>=
+refcount = 1;
+@ 
+
+<<heap term init>>=
+ret->refcount = 1;
+@ 
+
+\begin{comment}
+A cloned object of a shared term would have {\tt refcount} 1.
+Also, after replacing, the term retains its original {\tt refcount} value. 
+\end{comment}
+
+<<term::function declarations>>=
+term * reuse() { refcount++; return this; }
+@ %def reuse
+
+<<term::function declarations>>=
+bool shared() { return (refcount > 1); }
+@ %def shared
+
+\begin{comment}\label{com:on sharing}
+A few notes on sharing.
+One of the biggest advantages of sharing is that common subexpressions
+need only be evaluated once.
+Sharing of nodes can, however, interfere with a few basic
+operations in Escher.\\
+
+\noindent Firstly, I believe the operation of checking for
+free-variable capture, a test we need to do frequently during pattern
+matching (see \S \ref{subsec:pattern matching}) and term substitution 
+(see \S \ref{subsec:term substitution}), cannot be done efficiently if a
+variable that occurs both free and bound in a term is shared.\\
+% The algorithm described in Comment \ref{com:labelVariables} will not work. 
+% It is hard to imagine an (easy) labelling scheme that would work.\\
+
+\noindent Second, sharing of nodes is not always safe.
+Some statements in the booleans module, especially the ones that
+support logic programming (see for example Comment \ref{com:beta reduction}), 
+can potentially change shared nodes in destructive ways.
+The extensive use of such sharing-unfriendly statements in Escher is
+the primary reason I gave up on sharing.\\
+
+\noindent In the absence of sharing, the computational saving that can
+be obtained from common subexpression evaluation can be achieved using
+(intelligent) caching.\index{caching of computation steps}\\
+
+\noindent Having said all that, sharing does have at least one
+important use in our interpreter; see Comment \ref{com:collectSharedVars}.
+\end{comment}
+
+\begin{comment}
+The following function, which is no longer in use, provides a way to
+unshare shared nodes using the side effect of the cloning operation 
+(see Comment \ref{com:cloning of shared nodes}).
+Time complexity: the entire term needs to be traversed; nodes that are
+not traversed by this function will be traversed by {\tt clone}.
+\end{comment}
+
+<<term::function declarations>>=
+void unshare(term * parent, unint id);
+@ 
+
+\begin{comment}
+We should {\tt assert(parent)} because a shared node, by definition, 
+have at least two parents.
+\end{comment}
+
+<<term::function definitions>>=
+void term::unshare(term * parent, unint id) {
+        if (refcount > 1) {
+                assert(parent); term * temp = clone();
+                parent->fields[id]->freememory(); parent->fields[id] = temp;
+                return;  }
+        int size = fieldsize;
+        for (int i=0; i!=size; i++) fields[i]->unshare(this, i);
+}
+@ 
+
+% \newpage
+\subsection{Free and Bound Variables}
+\begin{comment}
+One must be careful when dealing with free and bound variables.
+This is something that is not difficult to get right, but
+incredibly easy to get wrong!
+So please pay some attention.
+\end{comment}
+
+\begin{definition}
+An occurrence of a variable $x$ in a term is {\em bound} if it occurs
+within a subterm of the form $\lambda x.t$.
+\end{definition}
+\begin{definition}
+An occurrence of a variable in a term is {\em free} if it is not a
+bound occurrence.
+\end{definition}
+
+\begin{fact}
+A variable is free in a term iff it has a free occurrence.
+\end{fact}
+
+\begin{comment}
+The following function returns all the free variables inside a term.
+It is assumed that we have called {\tt labelVariables} on the term to
+initialize all the labels and binding labels.
+\end{comment}
+
+\begin{comment}\label{com:freevars computed}
+Computed free variables are cached in the array {\tt frvars}.
+The flag {\tt freevars\_computed} tells us whether {\tt frvars} has
+been initialized.
+An array instead of a set is used to store the free variables.
+This means free variables with multiple occurrences will be recorded
+multiple times.
+We need to record multiple occurrences; 
+see Comment~\ref{com:equation conditions}.
+Further, using an array is faster than using a set.
+\end{comment}
+
+<<term bool parts>>=
+bool freevars_computed; 
+
+<<term parts>>=
+int time_computed;
+
+<<term vector parts>>=
+int frvars[20];
+int frvarsize;
+
+<<term init>>=
+frvarsize = 0;
+freevars_computed = false;
+time_computed = -5;
+@ 
+
+<<heap term init>>=
+ret->frvarsize = 0;
+ret->freevars_computed = false;
+ret->time_computed = -5;
+@ 
+
+\begin{comment}
+These values become obsolete on replacing.
+\end{comment}
+
+<<term replace parts>>=
+frvarsize = 0;
+freevars_computed = false;
+time_computed = -5;
+
+<<term::function definitions>>=
+void term::getFreeVars() {
+        if (freevars_computed && time_computed == ltime) return;
+
+	frvarsize = 0;
+	freevars_computed = true; time_computed = ltime;
+
+	if (tag == D || tag == F) return;
+	if (tag == V) { frvars[0] = cname; frvarsize = 1; return; }
+	if (tag == ABS) {
+		fields[1]->getFreeVars();
+
+		for (int i=0; i!=fields[1]->frvarsize; i++) {
+		    if (fields[1]->frvars[i] == fields[0]->cname) continue;
+		    frvars[frvarsize] = fields[1]->frvars[i];
+		    frvarsize++;
+		}
+		assert(frvarsize <= 20);
+		return;
+	}
+        for (unint i=0; i!=fieldsize; i++) {
+                fields[i]->getFreeVars();
+		for (int j=0; j!=fields[i]->frvarsize; j++) {
+		    if (j > 0 && fields[i]->frvars[j] == fields[i]->frvars[j-1])
+			continue;
+		    frvars[frvarsize] = fields[i]->frvars[j];
+		    frvarsize++; 
+		}
+		assert(frvarsize <= 20);
+	}
+	return;
+}
+@ %def getFreeVars
+
+\begin{comment}\label{com:labelStaticBoundVars}
+For terms that stay unchanged throughout the whole computation
+(e.g. program statements), freeness checking of variables can be done
+(slightly) more efficiently by flagging each bound variable in the term
+directly up front.
+This is achieved using the following function {\tt labelStaticBoundVars()}.\\
+
+% \noindent At present, we only call this function on the head of
+% program statements.
+\end{comment}
+
+\begin{comment}
+We first look at the {\tt free} parameter.
+To ensure safe use, the {\tt free} parameter is only valid if the 
+{\tt validfree} parameter is true. 
+(The function {\tt labelStaticBoundVars} is responsible for setting this
+latter parameter. 
+Its value will get set to {\tt false} during cloning and replacing.)
+\end{comment}
+
+<<term bool parts>>=
+bool free;
+bool validfree;
+
+<<term init>>=
+validfree = false;
+@ 
+
+<<heap term init>>=
+ret->validfree = false;
+@ 
+
+\begin{comment}
+If the whole term $t$ on which {\tt labelBoundVars} is called is to be 
+cloned, then the existing value of the {\tt free} parameter would
+remain correct.
+However, if only a subterm $t_1$ of $t$ is to be cloned, then
+some variables that are bound in $t$ can become free in $t_1$.
+Variables that are free in $t$ would remain free in $t_1$ though.
+However, if $t$ (respectively $t_1$) is then subsequently substituted into
+another term (using the mechanism of syntactical variables), then free
+variables in $t$ (respectively $t_1$) can become bound.
+For all these reasons, we will not attempt to recycle values of 
+{\tt free} parameters during cloning and replacing.
+\end{comment}
+
+<<term clone parts>>=
+ret->validfree = false;
+@ 
+
+\begin{comment}
+Ditto for replacing.
+Free variables can become bound after replacing while bound variables
+remain bound after replacing.
+The trouble here is that we do not really want to traverse the input
+graph to label the variables.
+At present, we only use the {\tt free} parameters inside the head of
+a program statement during pattern matching.
+We will just mark in the {\tt replace} code that proper handling of
+the {\tt free} parameter is not yet implemented.
+\end{comment}
+
+<<term replace parts>>=
+validfree = false;
+
+<<term::function declarations>>=
+bool isFree() { assert(tag == V && validfree); return free; }
+@ %def isFree
+
+\begin{comment}
+A straightforward tree traversal is used to label the bound variables.
+Bound variables inside a lambda term are marked before the free variables.
+Hence the way labelling is done inside the {\tt (tag == V)} case.
+\end{comment}
+
+<<term::function definitions>>=
+void term::unmarkValidfree() {
+	validfree = false;
+	for (unint i=0; i!=fieldsize; i++) fields[i]->unmarkValidfree();
+}
+void term::labelStaticBoundVars() {
+        if (tag == F || tag == D || tag == SV) return;
+        if (tag == V) { if (!validfree) { validfree = true; free = true; }
+                        return; }
+        if (tag == ABS) {
+                fields[0]->validfree = true; fields[0]->free = false;
+                fields[1]->labelBound(fields[0]->cname);
+                fields[1]->labelStaticBoundVars();
+                return;
+        }
+        int size = fieldsize;
+        for (int i=0; i!=size; i++) fields[i]->labelStaticBoundVars();
+}
+@ %def labelStaticBoundVars
+
+<<term::function definitions>>=
+void term::labelBound(int x) {
+        if (tag == F || tag == D || tag == SV) return;
+        if (tag == V) { if (cname == x) { validfree = true; free = false; }
+                        return; }
+        if (tag == ABS) { fields[1]->labelBound(x); return; }
+        int size = fieldsize;
+        for (int i=0; i!=size; i++) fields[i]->labelBound(x);
+}
+@ %def labelBound
+
+\begin{comment}
+The functions {\tt isFree} and {\tt isFreeInside} discussed above
+allows one to check whether a subterm $s$ of a term $t$ occurs free
+inside $t$.
+Some times we want to check whether a variable $x$ has a free
+occurrence inside another term.
+The following functions allow us to do that.
+Some occurrences of the input variable could be bound.
+We return upon seeing the first free occurrence the input variable. \\
+
+\noindent There are two versions of this function.
+The first, {\tt occursFree}, uses {\tt getFreeVars} to compute all the
+free variables in a term and then check whether {\tt var} is inside
+this set.
+If {\tt occursFree} is called repeatedly by the same term, this
+caching of computed free variables is beneficial.
+The second, {\tt occursFreeNaive}, performs a simple traversal of the
+term to check whether {\tt var} occurs free.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::occursFree(int var) {
+        getFreeVars();
+        for (int i=0; i!=frvarsize; i++) if (frvars[i] == var) return true;
+        return false;
+}
+@ %def occursFree
+
+<<term::function definitions>>=
+bool term::occursFreeNaive(int var) {
+        vector<int> boundv; return occursFreeNaive(var, boundv);
+}
+@ %def occursFreeNaive
+
+<<term::function definitions>>=
+bool term::occursFreeNaive(int var, vector<int> boundv) {
+        if (tag == F || tag == D) return false;
+        if (tag == V) { 
+		if (freeze) return false;
+                if (cname == var && inVector(cname,boundv)== false) return true;
+                return false; }
+        if (tag == ABS) {
+                boundv.push_back(fields[0]->cname);
+                return fields[1]->occursFreeNaive(var, boundv);
+        }
+        int size = fieldsize;
+        for (int i=0; i!=size; i++) 
+                if (fields[i]->occursFreeNaive(var, boundv)) return true;
+        return false;
+}
+@ 
+
+\begin{comment}
+This function checks whether any free variable inside the calling
+term is captured by at least one of the bounded variables.
+The index of the captured variable is recorded in {\tt captd}.
+We store pointers to binding abstraction terms instead of strings for
+two reasons. 
+First, we sometimes need to change the name of a binding variable
+when a free variable is captured.
+This happens, for example, during term substitution.
+Having a pointer to the abstraction term allows us to jump straight to
+the offending term.
+Second, in terms of memory usage, storing pointers to terms is cheaper.
+If we want to use a set instead of a vector to store the binding
+variables (maybe for efficiency reasons), it is easy to put a
+wrapper around {\tt term\_schema *} and define a pointer $p$ to be less
+than $q$ iff {\tt p->fields[0]->name < q->fields[0]->name}.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::captured(vector<term *> & bvars, int & captd) {
+        if (bvars.empty()) return false;
+        getFreeVars();
+
+        int bsize = bvars.size();
+        for (int i=0; i!=frvarsize; i++) 
+                for (int j=0; j!=bsize; j++) 
+                        if (frvars[i] == bvars[j]->fields[0]->cname) {
+                               captd = j; return true; }
+        return false;
+}
+@ %def captured
+
+\begin{comment}
+For small terms, the use of vector for both {\tt frvars} and 
+{\tt bvars} is probably okay.
+For larger terms, the use of set (red-black trees) could be much better. 
+\end{comment}
+
+\begin{comment}
+The following function collects in a multiset all the bound variables in a 
+term. 
+\end{comment}
+
+<<term::function definitions>>=
+void term::collectLambdaVars(multiset<int> & ret) {
+	if (tag >= SV && tag <= D) return;
+	if (tag == ABS) {
+		ret.insert(fields[0]->cname);
+		fields[1]->collectLambdaVars(ret); return;
+        }
+	for (unint i=0; i!=fieldsize; i++)
+		fields[i]->collectLambdaVars(ret);
+}
+@ 
+
+\subsection{Variable Renaming}
+
+\begin{comment}
+Different forms of variable renaming are required in performing computations. 
+We discuss these operations in this section.
+\end{comment}
+
+\begin{comment}
+This function renames all occurrences of a variable {\tt var1} inside
+the current term to {\tt var2}.
+Note that both free and bound occurrences are renamed.
+This is okay since the function is only called (sensibly) as a
+subroutine by the other variable-renaming functions in this section.
+\end{comment}
+
+<<term::function definitions>>=
+void term::rename(int var1, int var2) {
+        if (tag == SV || tag == F || tag == D) return;
+        if (tag == V) { if (cname == var1) cname = var2; return; }
+        int size = fieldsize;
+        for (int i=0; i!=size; i++) fields[i]->rename(var1, var2);
+}
+@ %def rename
+
+\begin{comment}
+This function renames one particular lambda variable in a term.
+This is used in term substitutions in the case when a free variable
+capture occurs.
+\end{comment}
+
+<<term::function definitions>>=
+void term::renameLambdaVar(int var1, int var2) {
+        freevars_computed = false;
+        if (tag == SV || tag == V || tag == F || tag == D) return;
+        if (tag == ABS) {
+                if (fields[0]->cname == var1) {
+			fields[0]->cname = var2;
+                        fields[1]->rename(var1, var2);
+                }
+                // if lambda variables are distinct, this is not needed
+                fields[1]->renameLambdaVar(var1, var2);
+                return;
+        }
+        int size = fieldsize;
+        for (int i=0; i!=size; i++)
+                fields[i]->renameLambdaVar(var1, var2);
+}
+@ %def renameLambdaVar
+
+\newpage
+\subsection{Term Substitution}\label{subsec:term substitution}
+
+\begin{definition}\cite[pg. 55]{lloyd03logic-learning}
+A {\emph term substitution}\index{term substitution} is a finite set
+of the form $\{ x_1/t_1,\ldots, x_n/t_n \}$ where each $x_i$ is a
+variable, each $t_i$ is a term distinct from $x_i$, and
+$x_1,\ldots,x_n$ are distinct.
+\end{definition}
+
+\begin{comment}
+Each pair $x_i/t_i$ is represented as a structure as follows.
+\end{comment}
+
+<<term::type defs>>=
+struct substitution {
+        int first; 
+        term * second;
+        substitution() { second = NULL; }
+        substitution(int v, term * t) { first = v; second = t; }
+};
+@ %def substitution
+
+\begin{definition}\label{def:term substitution}
+\cite[pg. 56]{lloyd03logic-learning}
+Let $t$ be a term and $\theta = \{x_1/t_1,\ldots,x_n/t_n\}$ a term
+substitution.
+The instance $t\theta$ of $t$ by $\theta$ is the well-formed
+expression defined as follows.
+\begin{enumerate}
+ \item If $t$ is a variable $x_i$ for some $i \in \{1,\ldots,n\}$,
+   then $x_i\theta = t_i$.\\
+   If $t$ is a variable $y$ distinct from all the $x_i$, then $y\theta = y$.
+ \item If $t$ is a constant $C$, then $C\theta = C$.
+ \item If $t$ is an abstraction $\lambda x_i.s$, for some $i \in
+   \{1,\ldots,n\}$, then
+   \[ (\lambda x_i.s)\theta = 
+      \lambda x_i.
+     (s\{x_1/t_1,\ldots,x_{i-1}/t_{i-1},x_{i+1}/t_{i+1},\ldots,x_n/t_n\}). \]
+   If $t$ is an abstraction $\lambda y.s$, where $y$ is distinct from
+   all the $x_i$, 
+   \begin{enumerate}
+    \item if for some $i \in \{1,\ldots,n\}$, $y$ is free in $t_i$ and
+      $x_i$ is free in $s$, then
+      \[ (\lambda y.s)\theta = \lambda z.(s\{y/z\}\theta) \]
+      where $z$ is a new variable.
+    \item else 
+      $ (\lambda y.s)\theta = \lambda y.(s\theta); $
+   \end{enumerate} 
+ \item If $t$ is an application $(u\;v)$, then 
+        $(u\;v)\theta = (u\theta\;v\theta)$.
+ \item If $t$ is a tuple $(t_1,\ldots,t_n)$, then
+        $(t_1,\ldots,t_n)\theta = (t_1\theta,\ldots,t_n\theta)$. 
+\end{enumerate}
+\end{definition}
+
+\begin{comment}
+Term substitutions are performed by the function {\tt subst}. 
+There are two versions of it, one deals with singleton sets, the other
+with non-singleton sets.
+In both cases, real work is done by the function {\tt subst2}.
+\end{comment}
+
+\begin{comment}
+A single traversal of the tree achieves the desired 
+parallel-instantiation-of-variables effect.
+\end{comment}
+
+\begin{comment}
+Given $t$ and $\theta$, the function {\tt subst} will handle the
+special case where $t$ is a variable (and thus free) or a syntactical
+variable.
+All other cases are handled by {\tt subst2}.
+Before calling {\tt subst2}, we call {\tt labelStaticBoundVars} to
+label the variables.
+The {\tt free} values computed are safe for use here because they are
+read only once by {\tt subst2} and changes introduced by {\tt subst2} 
+are all localized on the spots where free variables live in the term.
+\end{comment}
+
+\begin{comment}\label{com:pointers in subs}
+Pointers to terms in {\tt subs} are all pointers to subterms in an
+existing structure that will be deleted after the term substitution.
+For that reason, these pointers can be safely reused once, but not
+more than that. \\
+
+\noindent For the special case where the current term is a variable or a
+syntactical variable, we need to make the term replacement 
+{\emph in place} using {\tt replace}. 
+\end{comment}
+
+<<term::function definitions>>=
+void term::subst(vector<substitution> & subs) {
+        if (tag == V || tag == SV) {
+		if (freeze) return;
+                int size = subs.size();
+                for (int i=0; i!=size; i++)
+                        if (cname == subs[i].first) {
+                                this->replace(subs[i].second); return; }
+                return;
+        }
+        labelStaticBoundVars();
+        vector<term *> bindingAbss;
+        subst2(subs, bindingAbss, NULL);
+	unmarkValidfree();
+}
+@ %def subst 
+
+\begin{comment}
+All the complications in Definition \ref{def:term substitution} are in
+the abstraction case.
+Operationally, checking all those conditions every time we encounter
+an abstraction is expensive.
+We can perform these checks only when strictly necessary by delaying
+them until before we apply a substitution, that is, until we see a
+free variable in $t$ that matches one of the variables in $\theta$.
+\end{comment}
+
+<<term::function definitions>>=
+void term::subst2(vector<substitution> & subs, vector<term *> bindingAbss,
+		  term ** pointer) {
+        if (tag == SV) { if (freeze) return; <<subst2::case of SV>> }
+        if (tag == V) { if (freeze) return; <<subst2::case of V>> }
+        if (tag == F || tag == D) return;
+        if (tag == ABS) {
+		if (fields[0]->tag == SV)
+			fields[0]->subst2(subs, bindingAbss, &fields[0]);
+                bindingAbss.push_back(this);
+                fields[1]->subst2(subs, bindingAbss, &fields[1]);
+                return;
+        }
+        int size = fieldsize;
+        for (int i=0; i!=size; i++) 
+                fields[i]->subst2(subs, bindingAbss, &fields[i]);
+}
+@ %def subst2
+
+\begin{comment}
+Term substitution is not formally defined for syntactical variables.
+It should behave like a free variable (see Comment \ref{com:subst2 V case}), 
+except that we do not have to worry about free variable capture.
+\end{comment}
+
+<<subst2::case of SV>>=
+int size = subs.size();
+for (int i=0; i!=size; i++) 
+        if (cname == subs[i].first) { <<subst2::replace by ti>> return; }
+return;
+@ 
+
+\begin{comment}
+See the first part of Comment \ref{com:pointers in subs} for why we do
+what we do here. 
+The parent pointer must exist because the case where it does not
+exist is handled by {\tt subst}.
+\end{comment}
+
+<<subst2::replace by ti>>=
+assert(pointer);
+this->freememory();
+if (!subs[i].second->noredex && subs[i].second->shared()) 
+	*pointer = subs[i].second->clone();
+else *pointer = subs[i].second->reuse();
+@ 
+
+<<term bool parts>>=
+bool noredex;
+
+<<term init>>=
+noredex = false;
+
+<<heap term init>>=
+ret->noredex = false;
+
+<<term clone parts>>=
+ret->noredex = noredex;
+
+<<term replace parts>>=
+noredex = t->noredex;
+@ 
+
+<<term::function declarations>>=
+void setNoRedex() {
+        noredex = true;
+        for (unint i=0; i!=fieldsize; i++)
+                fields[i]->setNoRedex();
+}
+@ 
+
+\begin{comment}\label{com:subst2 V case}
+We now look at the {\tt tag == V} case.
+If the current term is a bound variable in $t$, then the first part of
+Definition \ref{def:term substitution} (3) applies and nothing changes. 
+If the current term is a free variable in $t$ and does not occur in
+$\theta$, the second part of Definition \ref{def:term substitution} (1) 
+applies and again nothing happens.
+If the current term is a free variable in $t$ that matches an $x_i$ in
+$\theta$, then the first part of Definition \ref{def:term substitution} (1)
+applies and we substitute the current term with $t_i$.
+Before we do that, however, we check whether any free variable in
+$t_i$ is captured by any $\lambda$ abstraction that encloses the
+current term.
+If yes, part (a) of Definition \ref{def:term substitution} (3) applies
+and we must rename the offending $\lambda$ variable before replacing
+the current term with $t_i$.
+Otherwise, part (b) of Definition \ref{def:term substitution} (3)
+applies and we can just go ahead and replace the current term with $t_i$.
+\end{comment}
+
+<<subst2::case of V>>=
+if (isFree() == false) return;
+int size = subs.size();
+for (int i=0; i!=size; i++) {
+        if (cname != subs[i].first) continue;
+        <<subst2::free variable captured>>
+        <<subst2::replace by ti>>
+        return;
+}
+return;
+@ 
+
+<<subst2::free variable captured>>=
+int k;
+while (subs[i].second->captured(bindingAbss,k))
+    bindingAbss[k]->renameLambdaVar(bindingAbss[k]->fields[0]->cname,newPVar());
+@ 
+
+\begin{comment}
+The use of {\tt captured} (hence the use of cached computed free
+variables) here warrants some caution.
+If {\tt subs[i].second} does not remain unchanged throughout the term
+substitution process, errors can creep in. 
+We now argue that {\tt subs[i].second} stays unchanged throughout.\\
+
+\noindent Term substitution is only used in two places in Escher.
+The first place is in the construction of body instances
+after successful pattern matching on the head of a statement.
+(See Comment \ref{com:pattern matching}.)
+The use of {\tt subst} has no problem here because all the terms in
+$\theta$ are in the matched redex, whereas we only do surgery on the
+(cloned) body of a statement.\\
+
+\noindent The other place term substitutions take place is in some of
+the internal simplification routines described in 
+\S \ref{subsec:simplification}.
+Such uses only ever involve a single pair $\{x/t\}$.
+In all routines except beta reduction, $t$ will remain unchanged
+because of the requirement that $x$ does not occur free in $t$.
+In beta reduction (see Comment \ref{com:beta reduction}), it is easy
+to see that $t$ remains unchanged since substitution is a once off
+operation.
+That is, even if $x$ occurs free in $t$, it will never be substituted.
+(Otherwise, we will have an infinite recursion.)
+\end{comment}
+
+\begin{comment}
+The following is the version of {\tt subst} that handles singleton
+term substitutions.
+We make a vector out of the single pair and use {\tt subst2} to do the job.
+\end{comment}
+
+<<term::function definitions>>=
+void term::subst(substitution & sub) {
+        if (tag == V || tag == SV) {
+                if (cname == sub.first) this->replace(sub.second); return; }
+        labelStaticBoundVars();
+        vector<term *> bindingAbs;
+        vector<substitution> subs; subs.push_back(sub);
+        subst2(subs, bindingAbs, NULL);
+	unmarkValidfree();
+}
+@ 
+
+\begin{comment}
+A correct implementation of substitution should get the following right.
+Given the statement
+\begin{verbatim}
+    (func z) = \x.\y.\x.(&& z (|| x y)).
+\end{verbatim}
+and the query
+\begin{verbatim}
+    : (func (f x y)),
+\end{verbatim}
+Escher should produce the following
+\begin{verbatim}
+    \pve0.\pve1.\pve0.(&& (f x y) (|| pve0 pve1)).
+\end{verbatim}
+Notice that {\emph two} free variables got captured along the way.
+\end{comment}
+
+\subsection{Theorem Prover Helper Functions}
+\begin{comment}
+We now look at some functions that check whether a given term satisfy
+some properties.
+These functions are needed by the theorem prover. 
+\end{comment}
+
+% <term::function definitions>=
+% // bool term::containsQuantifiers() {
+% //	if (tag == APP && (lc()->isF(iPi) || lc()->isF(iSigma)))
+% //		return true;
+% //	for (unint i=0; i!=fieldsize; i++)
+% //		if (fields[i]->containsQuantifiers()) return true;
+% //	return false;
+% // }
+% @ %def containsQuantifiers
+
+\begin{comment}
+A free variable is a variable with a {\tt cname} that is larger or equal
+to 100000.
+\end{comment}
+
+<<term::function definitions>>=
+bool isUVar(term * t) { return (t->tag == V && t->cname >= 100000); }
+bool isUVar(int cn) { return (cn >= 100000); }
+
+bool term::containsFreeVariable() {
+	if (tag == V) return isUVar(cname);
+	for (unint i=0; i!=fieldsize; i++)
+		if (fields[i]->containsFreeVariable()) return true;
+	return false;
+}
+
+void term::collectFreeVariables(set<int> & fvars) {
+	if (tag == V && isUVar(cname)) fvars.insert(cname);
+	for (unint i=0; i!=fieldsize; i++)
+		fields[i]->collectFreeVariables(fvars);
+	return;
+}
+@ %def isUVar containsFreeVariable collectFreeVariables 
+
+\begin{comment}
+This next function checks whether the current term has the form 
+$\neg \phi$ for some $\phi$.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::isNegation() { return (isApp() && lc()->isF(iNot)); }
+@ %def isNegation
+
+\begin{comment}
+This function checks whether the current term has the form $\neg
+\Box_i \neg \phi$ ($\equiv \Diamond \phi$) for some $\phi$.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::isDiamond() {
+	return (isNegation() && rc()->isModal() &&
+		rc()->fields[0]->isNegation());
+}
+@ %def isDiamond
+
+\begin{comment}
+The next function checks whether the input term $t2$ is the negation
+(at the syntactic level only) of the calling term $t1$.
+We have to worry about symmetries here.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::isNegationOf(term * t2) {
+	term * t1 = this;
+	if ((t1->isD(iTrue) && t2->isD(iFalse)) ||
+	    (t1->isD(iFalse) && t2->isD(iTrue)))
+		return true;
+	if (t2->isApp() && t2->lc()->isF(iNot) && t1->equal(t2->rc()))
+		return true;
+	if (t1->isApp() && t1->lc()->isF(iNot) && t2->equal(t1->rc()))
+		return true;
+	return false;
+}
+@ %def isNegationOf
+
+\begin{comment}
+This function strips off double negations from a term.
+\end{comment}
+
+<<term::function definitions>>=
+void term::stripNegations() {
+	if (isNegation() && rc()->isNegation()) {
+		term * term = rc()->rc();
+		rc()->fields[1] = NULL;
+		this->replace(term);
+	}
+}
+@ %def stripNegations 
+
+\begin{comment}
+Sometimes, we need to replace a subterm $s$ in $t$ by another term $r$.
+The following function performs this operation.
+Note that free-variable capture can occur as a result; no attempt is
+made to check for this condition.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::termReplace(term * s, term * r, term * parent, int id) {
+	if (equal(s)) {
+		if (parent == NULL) this->replace(r->clone());
+		else { parent->fields[id]->freememory();
+		       parent->fields[id] = r->clone(); }
+		return true;
+	}
+	bool ret = false;
+	int size = fieldsize;
+	for (int i=0; i!=size; i++)
+		ret = (ret || fields[i]->termReplace(s, r, this, i));
+	return ret;
+}
+@ %def termReplace 
+
+\begin{comment}
+The function {\tt matchReplace} takes a term $s$ having the form
+$\nec{i_1} \cdots \nec{i_j} x$, a term $r$ having the form 
+$\nec{j_1} \cdots \nec{j_k} x$, and replaces every subterm $t$ of the 
+calling term such that $t = s \theta$ for some $\theta$ with 
+the term $r \theta$.
+We find $\theta$ using the {\tt redex\_match} function used for pattern 
+matching.
+This is perhaps a lazy way of doing things....
+\end{comment}
+
+<<term::function definitions>>=
+extern bool redex_match(term * head, term * body, vector<substitution> & theta);
+
+bool term::matchReplace(term * s, term * r, term * parent, int id) {
+	vector<substitution> theta;
+	if (redex_match(s, this, theta)) {
+		term * r2 = r->clone();
+		r2->subst(theta);
+		if (parent == NULL) this->replace(r2);
+		else {  parent->fields[id]->freememory();
+			parent->fields[id] = r2; }
+		return true;
+	}
+	bool ret = false;
+	int size = fieldsize;
+	for (int i=0; i!=size; i++)
+		ret = (ret || fields[i]->matchReplace(s, r, this, i));
+	return ret;
+}
+@ %def matchReplace
+
+\begin{comment}
+We normalise a term to contain only some minimal set of system-defined
+constants.
+This is done in two steps. 
+In the first step, we perform the basic transformations.
+This process generates many double negations.
+We remove these in the second step.
+\end{comment}
+
+<<term::function definitions>>=
+term * term::normalise() 
+      { return (this->normalise1())->normalise2(); }
+@ %def normalise
+
+\begin{comment}
+This next function transforms the calling term into normal form.
+A term is in normal form if it contains only the following
+system-defined function symbols:
+$\it{False}$, $\it{not}$, $\|\|$, $\Diamond (\equiv \it{not} \Box
+\it{not})$ and $\exists$.
+\end{comment}
+
+<<term::function definitions>>=
+term * term::normalise1() {
+	for (unint i=0; i!=fieldsize; i++) 
+		fields[i] = fields[i]->normalise();
+	term * ret;
+	if (isD(iTrue)) {
+	   	// ret = new_term(APP); ret->lc = new_term(F, iNot);
+		// ret->rc = new_term(D, iFalse);
+
+		ret = new_term(APP); ret->insert(new_term(F, iNot));
+		ret->insert(new_term(D, iFalse));
+		this->replace(ret); return this;
+	} 
+	if (isFunc2Args(iImplies)) {
+		lc()->lc()->cname = iOr; 
+		ret = new_term(APP); 
+		// ret->lc = new_term(F, iNot);
+		// ret->rc = lc->rc;
+		ret->insert(new_term(F, iNot));
+		ret->insert(lc()->rc());
+		lc()->fields[1] = ret;
+		return this;
+	}
+	if (isFunc2Args(iAnd)) { <<normalise1::and>> }
+	if (isFunc2Args(iIff)) { <<normalise1::iff>> }
+	if (isApp() && lc()->isF(iPi)) {
+		lc()->cname = iSigma;
+		ret = new_term(APP); 
+		ret->insert(new_term(F, iNot));
+		ret->insert(rc()->fields[1]);
+		rc()->fields[1] = ret;
+		ret = new_term(APP); ret->insert(new_term(F, iNot));
+		ret->insert(this);
+		return ret;
+	} 
+	return this;
+}
+@ %def normalise1
+
+\begin{comment}
+We turn a formula of the form {\tt (\&\& p q)} into another formula 
+{\tt (|| (not p) (not q))}.
+\end{comment}
+
+<<normalise1::and>>=
+ret = new_term(APP); 
+// ret->lc = new_term(F, iNot);
+ret->insert(new_term(F, iNot));
+term * arg2 = newT2Args(F, iOr);
+term * arg21 = new_term(APP); 
+// arg21->lc = new_term(F, iNot); arg21->rc = lc->rc->clone();
+arg21->insert(new_term(F, iNot)); arg21->insert(lc()->rc()->clone());
+term * arg22 = new_term(APP);
+// arg22->lc = new_term(F, iNot); arg22->rc = rc->clone();
+arg22->insert(new_term(F, iNot)); arg22->insert(rc()->clone());
+arg2->initT2Args(arg21, arg22);
+// ret->rc = arg2;
+ret->insert(arg2);
+this->replace(ret); return this;
+@ 
+
+\begin{comment}
+We change a formula of the form {\tt (iff p q)} into a formula of the
+form {\tt (\&\& (|| (not p) q) (|| (not q) p))} and then normalise again
+to turn the conjunction into a disjunction.
+\end{comment}
+
+<<normalise1::iff>>=
+ret = newT2Args(F, iAnd);
+term * arg1 = newT2Args(F, iOr);
+term * arg1a = new_term(APP);
+// arg1a->lc = new_term(F, iNot); arg1a->rc = lc->rc->clone();
+arg1a->insert(new_term(F, iNot)); arg1a->insert(lc()->rc()->clone());
+arg1->initT2Args(arg1a, rc()->clone());
+term * arg2 = newT2Args(F, iOr);
+term * arg2a = new_term(APP);
+// arg2a->lc = new_term(F, iNot); arg2a->rc = rc->clone();
+arg2a->insert(new_term(F, iNot)); arg2a->insert(rc()->clone());
+arg2->initT2Args(arg2a, lc()->rc()->clone());
+ret->initT2Args(arg1, arg2);
+ret = ret->normalise1();
+this->replace(ret); return this;
+@ 
+
+<<term::function definitions>>=
+term * term::normalise2() {
+	if (isApp() && rc()->isApp() && lc()->isF(iNot) &&
+	    rc()->lc()->isF(iNot)) {
+		term * ret = rc()->rc();
+		rc()->fields[1] = NULL;
+		freememory();
+		ret = ret->normalise2();
+		return ret;
+	}
+	for (unint i=0; i!=fieldsize; i++)
+	 	fields[i] = fields[i]->normalise2();
+	return this;
+}
+@ %def normalise2 
+
+\begin{comment}
+The next function allows us to collect together all the function
+symbols in a term.
+\end{comment}
+
+<<term::function definitions>>=
+void term::collectFunctionNames(set<int> & x) {
+	if (tag == F) { x.insert(cname); return; }
+	for (unint i=0; i!=fieldsize; i++)
+		fields[i]->collectFunctionNames(x);
+}
+@ 
+
+
+\chapter{Equational Reasoning}
+\section{Term Rewriting}
+
+\subsection{Internal Rewrite Routines}
+\label{subsec:simplification}
+\begin{comment}
+To capture precisely and completely statement schemas in the booleans
+module, some of which have complicated side conditions on
+syntactical variables, we implement them as algorithms.
+These algorithms form the internal rewrite module of Escher, and they
+are called before any other program statements.
+\end{comment}
+
+\begin{comment}
+This next function implements the following equality statements:
+\begin{gather*}
+= \;:\; a \rightarrow a \rightarrow \varOmega \\
+({\bf C}\; x_1\ldots x_n = {\bf C}\; y_1\ldots y_n) =
+  (x_1 = y_1) \wedge \cdots \wedge (x_n = y_n) \\
+\hspace{3em}\% \;\text{where ${\bf C}$ is a data constructor of arity n}.\\
+({\bf C}\; x_1\ldots x_n = {\bf D}\; y_1\ldots y_m) = \bot \\
+\hspace{3em}\% \;\text{where ${\bf C}$ and ${\bf D}$ are data
+ constructors of arity $n$ and $m$ respectively, and ${\bf C} \neq {\bf D}$.}\\
+(() = ()) = \top \\
+((x_1,\ldots,x_n) = (y_1,\ldots,y_n)) = (x_1 = y_1) \wedge \cdots
+ \wedge (x_n = y_n) \\
+\hspace{3em}\% \;\text{where $n = 2,3,\ldots$ .}
+\end{gather*}
+\end{comment}
+
+<<term::function definitions>>=
+bool term::simplifyEquality(term * parent, unint id) {
+        bool changed = false;
+        term * ret = this;
+        term * t1 = lc()->rc(), * t2 = rc();
+        <<simplifyEquality::local variables>>
+
+        <<simplifyEquality::identical variables and function symbols>>  
+        <<simplifyEquality::irrelevant cases>>
+	<<simplifyEquality::case of strings>>
+        <<simplifyEquality::case of products>>
+        <<simplifyEquality::case of applications>>
+
+simplifyEquality_cleanup:
+        if (changed) { <<simplify update pointers>> }
+        return changed;
+}
+@ %def simplifyEquality 
+
+\begin{comment}
+The pointer {\tt ret} points to the current term under consideration.
+If {\tt changed} is true by the end of the operation, then an equality
+embedded in the current term would have been simplified.
+Otherwise, it stays the same as before the function is called.
+Assuming the term has been changed, we have two cases to consider.
+If the current term is the root term ({\tt parent == NULL}), then we
+overwrite the current term with {\tt ret}.
+Otherwise, we simply redirect the pointer {\tt parent->fields[id]} to 
+{\tt ret}. 
+Note that this code chunk is used in the other simplification routines
+as well.
+\end{comment}
+
+<<simplify update pointers>>=
+assert(ret);
+if (parent == NULL) { 
+	this->replace(ret); ret->freememory();
+} else { parent->fields[id]->freememory(); parent->fields[id] = ret; }
+@ 
+
+<<simplifyEquality::identical variables and function symbols>>=
+if ((t1->isVar() && t2->isVar()) || (t1->isF() && t2->isF()))
+	if (t1->cname == t2->cname) {
+		changed = true; ret = new_term(D, iTrue); 
+		goto simplifyEquality_cleanup;
+	}
+@ 
+
+\begin{comment}
+This simplification does not apply when one of the terms is a variable.
+We also do not handle equality of abstractions.
+That is done using statements in the booleans module.
+\end{comment}
+
+<<simplifyEquality::irrelevant cases>>=
+if (t1->isVar() || t2->isVar()) return false;
+if (t1->isAbs()) return false;
+@ 
+
+\begin{comment}
+We have a special case for strings.
+Strings are represented internally as lists of characters.
+Using the default rule to check the equality of two lists involves
+making many smaller steps.
+The procedure here reduces comparison of strings to a single-step operation.
+Surprisingly, this is actually not a great deal faster than the default
+multi-step procedure. 
+\end{comment}
+
+<<simplifyEquality::case of strings>>=
+if (t1->isAString() && t2->isAString()) {
+	changed = true;
+	term * p1 = t1, * p2 = t2;
+	while (true) {
+		if (p1->isD(iEmptyList) && p2->isD(iEmptyList)) break;
+		if (p1->tag != p2->tag ||
+		    p1->lc()->rc()->cname!=p2->lc()->rc()->cname)
+		      { ret=new_term(D,iFalse); goto simplifyEquality_cleanup;}
+		p1 = p1->rc();
+		p2 = p2->rc();
+	}
+	ret = new_term(D, iTrue);
+	goto simplifyEquality_cleanup;
+} 
+@ 
+
+\begin{comment}
+We need to check that both {\tt t1} and {\tt t2} are products before 
+proceeding because one of them can be a (nullary) function symbol that
+stands for another product.
+However, once we have done that, we only have to check the dimension of 
+{\tt t1} because the type checker would have made sure that {\tt t2} has 
+the same dimension.
+Given $(x_1,\ldots,x_n) = (y_1,\ldots,y_n)$, we create a term of
+the form $((\cdots((x_1 \wedge y_1) \wedge (x_2 \wedge y_2)) \cdots) \wedge
+(x_n \wedge y_n))$. 
+\end{comment}
+
+<<simplifyEquality::case of products>>=
+if (t1->isProd() && t2->isProd()) {
+        changed = true; unint t1_args = t1->fieldsize;
+
+        <<simplifyEquality::case of products::empty tuples>>
+        <<simplifyEquality::case of products::error handling>>
+
+        term * eq1 = newT2Args(F, iEqual);
+        eq1->initT2Args(t1->fields[0]->reuse(), t2->fields[0]->reuse());
+        term * eq2 = newT2Args(F, iEqual);
+        eq2->initT2Args(t1->fields[1]->reuse(), t2->fields[1]->reuse());
+
+        ret = newT2Args(F, iAnd); ret->initT2Args(eq1, eq2);
+        for (unint i=0; i!=t1_args-2; i++) {
+                term * eqi = newT2Args(F, iEqual);
+                eqi->initT2Args(t1->fields[i+2]->reuse(), 
+				t2->fields[i+2]->reuse());
+                term * temp = newT2Args(F, iAnd);
+		temp->initT2Args(ret, eqi);
+                ret = temp;
+        }
+        goto simplifyEquality_cleanup;
+}
+@ 
+
+\begin{comment}
+The boolean module as it stands in \cite{lloyd03logic-learning} does
+not handle the expression $() = ()$.
+We will cater for that case here, which should of course evaluate to $\top$.
+\end{comment}
+
+<<simplifyEquality::case of products::empty tuples>>=
+if (t1_args == 0) { ret = new_term(D, iTrue); goto simplifyEquality_cleanup; }
+@ 
+
+\begin{comment}
+Besides the empty tuple, we handle all finite-length tuples of
+dimension at least two.
+It does not make a great deal of sense to have a tuple of dimension one.
+\end{comment}
+
+<<simplifyEquality::case of products::error handling>>=
+if (t1_args != t2->fieldsize || t1_args < 2) {
+        setSelector(STDERR); ioprint("Error in simplifyEquality:products\n");
+        t1->print(); ioprintln(); t2->print(); ioprintln(); 
+}
+assert(t1_args == t2->fieldsize && t1_args >= 2);
+@ 
+
+<<simplifyEquality::local variables>>=
+int t1_arity = 0, t2_arity = 0;
+@ 
+
+<<simplifyEquality::case of applications>>=
+<<simplifyEquality::check whether we have data constructors>>
+changed = true;
+
+if (t1_arity == 0 && t2_arity == 0) {
+        if (t1->spineTip()->isfloat && t2->spineTip()->isfloat) {
+                if (t1->spineTip()->numf == t2->spineTip()->numf) 
+                        ret = new_term(D, iTrue);
+                else ret = new_term(D, iFalse);
+                goto simplifyEquality_cleanup; 
+        } else if (t1->spineTip()->isint && t2->spineTip()->isint) {
+                if (t1->spineTip()->numi == t2->spineTip()->numi) 
+                        ret = new_term(D, iTrue);
+                else ret = new_term(D, iFalse);
+                goto simplifyEquality_cleanup; 
+        }
+        if (t1->spineTip()->cname == t2->spineTip()->cname) 
+		ret= new_term(D,iTrue); 
+        else ret = new_term(D, iFalse);
+        goto simplifyEquality_cleanup; 
+}
+if (t1_arity != t2_arity || t1->spineTip()->cname != t2->spineTip()->cname) 
+	{ ret = new_term(D, iFalse); goto simplifyEquality_cleanup; }
+
+ret = newT2Args(F, iEqual);
+ret->initT2Args(t1->fields[1]->reuse(), t2->fields[1]->reuse());
+t1_arity--;
+while (t1_arity != 0) {
+        t1 = t1->fields[0]; t2 = t2->fields[0];
+        term * temp = newT2Args(F, iEqual);
+        temp->initT2Args(t1->fields[1]->reuse(), t2->fields[1]->reuse());
+        term * temp2 = newT2Args(F, iAnd); temp2->initT2Args(temp, ret);
+        ret = temp2;
+        t1_arity--;
+}
+@ 
+
+\begin{comment}
+We need to check whether the leftmost symbol of both {\tt t1} and 
+{\tt t2} is a data constructor.
+If we go pass this point, {\tt t1} and {\tt t2} have the right form
+for comparison.
+\end{comment}
+
+<<simplifyEquality::check whether we have data constructors>>=
+if (!t1->spineTip(t1_arity)->isD()) return false;
+if (!t2->spineTip(t2_arity)->isD()) return false;
+@ 
+
+\begin{comment}
+This function implements the different arithmetic operations.
+We currently support the following functions on numbers.
+More can be added if necessary.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::simplifyArithmetic(term * parent, unint id) {
+        if (!(rc()->isD() && lc()->rc()->isD())) return false;
+	
+        int op = fields[0]->lc()->cname; 
+	if (!(op >= iAdd && op <= iAtan2)) return false;
+
+        term * t1 = lc()->rc(), * t2 = rc();
+	if (t1->isD(iInfinity) || t2->isD(iInfinity)) return false;
+
+        term * ret = NULL;
+        <<simplifyArithmetic::add, subtract, multiply and divide>>
+        else if (op == iMax) {
+                if (t1->isfloat && t2->isfloat) {
+                        if (t1->numf >= t2->numf) ret =new_term_float(t1->numf);
+                        else ret = new_term_float(t2->numf) ;
+                } else if (t1->isint && t2->isint) {
+                        if (t1->numi >= t2->numi) ret = new_term_int(t1->numi);
+                        else ret = new_term_int(t2->numi) ;
+                } else return false;
+        } else if (op == iMin) {
+                if (t1->isfloat && t2->isfloat) {
+                        if (t1->numf <= t2->numf) ret =new_term_float(t1->numf);
+                        else ret = new_term_float(t2->numf) ;
+                } else if (t1->isint && t2->isint) {
+                        if (t1->numi <= t2->numi) ret = new_term_int(t1->numi);
+                        else ret = new_term_int(t2->numi) ;
+                } else return false;
+        } else if (op == iMod) {
+                assert(t1->isint && t2-isint);
+                ret = new_term_int(int(t1->numi % t2->numi)); 
+        } else if (op == iAtan2) {
+		assert(t1->isfloat && t2->isfloat);
+		ret = new_term_float(atan2(t1->numf, t2->numf));
+	}
+        <<simplify update pointers>>
+        return true;
+}
+@ %def simplifyArithmetic
+
+\begin{comment}\label{com:arithmetic}
+We overload the basic addition, subtraction, multiplication and
+division operations to act on numbers, be they integers or
+floating-point numbers.
+The definitions are fairly standard, when one of the arguments is a
+floating-point number, the result is a floating-point number.
+When both arguments are integers, the result is an integer, except
+when we are dividing two integers, in which case the result can be 
+a floating-point number.
+\end{comment}
+
+<<simplifyArithmetic::add, subtract, multiply and divide>>=
+if (op == iAdd) { 
+        if (t1->isfloat && t2->isfloat)
+                ret = new_term_float(t1->numf + t2->numf);
+        else if (t1->isfloat && t2->isint)
+                ret = new_term_float(t1->numf + t2->numi);
+        else if (t1->isint && t2->isfloat)
+                ret = new_term_float(t1->numi + t2->numf);
+        else if (t1->isint && t2->isint)
+                ret = new_term_int(t1->numi + t2->numi);
+        else return false;
+} else if (op == iSub) { 
+        if (t1->isfloat && t2->isfloat)
+                ret = new_term_float(t1->numf - t2->numf);
+        else if (t1->isfloat && t2->isint)
+                ret = new_term_float(t1->numf - t2->numi);
+        else if (t1->isint && t2->isfloat)
+                ret = new_term_float(t1->numi - t2->numf);
+        else if (t1->isint && t2->isint)
+                ret = new_term_int(t1->numi - t2->numi);
+        else return false;
+} else if (op == iMul) { 
+        if (t1->isfloat && t2->isfloat)
+                ret = new_term_float(t1->numf * t2->numf);
+        else if (t1->isfloat && t2->isint)
+                ret = new_term_float(t1->numf * t2->numi);
+        else if (t1->isint && t2->isfloat)
+                ret = new_term_float(t1->numi * t2->numf);
+        else if (t1->isint && t2->isint)
+                ret = new_term_int(t1->numi * t2->numi);
+        else return false;
+} else if (op == iDiv) { 
+        if (t1->isfloat && t2->isfloat)
+                ret = new_term_float(t1->numf / t2->numf);
+        else if (t1->isfloat && t2->isint)
+                ret = new_term_float(t1->numf / t2->numi);
+        else if (t1->isint && t2->isfloat)
+                ret = new_term_float(t1->numi / t2->numf);
+        else if (t1->isint && t2->isint) {
+		double res = (double)t1->numi / (double)t2->numi;
+		if (res == floor(res)) ret = new_term_int(t1->numi / t2->numi);
+                else ret = new_term_float(res);
+        } else return false;
+}
+@ 
+
+\begin{comment}
+This function implements the different inequalities.
+It has the same overall structure as {\tt simplifyArithmetic}.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::simplifyInequalities(term * parent, unint id) {
+        if (!(rc()->isD() && lc()->rc()->isD())) return false;
+        int rel = lc()->lc()->cname; 
+
+	if (!(rel >= iLT && rel <=iGTE)) return false;
+
+        term * t1 = lc()->rc() ;
+	term * t2 = rc() ;
+
+	if (t1->isD(iInfinity) || t2->isD(iInfinity)) return false;
+
+        term * ret = NULL;
+        if (rel == iLT) { 
+                if (t1->isint && t2->isint) {
+                        if (t1->numi < t2->numi) ret = new_term(D,iTrue); 
+                        else ret = new_term(D,iFalse);
+                } else if (t1->isfloat && t2->isfloat) {
+                        if (t1->numf < t2->numf) ret = new_term(D,iTrue); 
+                        else ret = new_term(D,iFalse);
+                } else if (t1->isint && t2->isfloat) {
+                        if (t1->numi < t2->numf) ret = new_term(D,iTrue); 
+                        else ret = new_term(D,iFalse);
+		} else if (t1->isfloat && t2->isint) {
+                        if (t1->numf < t2->numi) ret = new_term(D,iTrue); 
+                        else ret = new_term(D,iFalse);
+                } else return false;
+        } else if (rel == iLTE) {
+                if (t1->isint && t2->isint) {
+                        if (t1->numi <= t2->numi) ret = new_term(D,iTrue); 
+                        else ret = new_term(D,iFalse);
+                } else if (t1->isfloat && t2->isfloat) {
+                        if (t1->numf <= t2->numf) ret = new_term(D,iTrue); 
+                        else ret = new_term(D,iFalse);
+                } else if (t1->isint && t2->isfloat) {
+                        if (t1->numi <= t2->numf) ret = new_term(D,iTrue); 
+                        else ret = new_term(D,iFalse);
+                } else if (t1->isfloat && t2->isint) {
+                        if (t1->numf <= t2->numi) ret = new_term(D,iTrue); 
+                        else ret = new_term(D,iFalse);
+                } else return false;
+        } else if (rel == iGT) {
+                if (t1->isint && t2->isint) {
+                        if (t1->numi > t2->numi) ret = new_term(D,iTrue); 
+                        else ret = new_term(D,iFalse);
+                } else if (t1->isfloat && t2->isfloat) {
+                        if (t1->numf > t2->numf) ret = new_term(D,iTrue); 
+                        else ret = new_term(D,iFalse);
+                } else if (t1->isint && t2->isfloat) {
+                        if (t1->numi > t2->numf) ret = new_term(D,iTrue); 
+                        else ret = new_term(D,iFalse);
+                } else if (t1->isfloat && t2->isint) {
+                        if (t1->numf > t2->numi) ret = new_term(D,iTrue); 
+                        else ret = new_term(D,iFalse);
+                } else return false;
+        } else if (rel == iGTE) {
+                if (t1->isint && t2->isint) {
+                        if (t1->numi >= t2->numi) ret = new_term(D,iTrue); 
+                        else ret = new_term(D,iFalse);
+                } else if (t1->isfloat && t2->isfloat) {
+                        if (t1->numf >= t2->numf) ret = new_term(D,iTrue); 
+                        else ret = new_term(D,iFalse);
+                } else if (t1->isint && t2->isfloat) {
+                        if (t1->numi >= t2->numf) ret = new_term(D,iTrue); 
+                        else ret = new_term(D,iFalse);
+                } else if (t1->isfloat && t2->isint) {
+                        if (t1->numf >= t2->numi) ret = new_term(D,iTrue); 
+                        else ret = new_term(D,iFalse);
+                } else return false;
+        }
+        <<simplify update pointers>>
+        return true;
+}
+@ %def simplifyInequalities 
+
+\begin{comment}
+We use the C math library to support common math operations like sin, cos, etc.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::simplifyMath(term * parent, unint id) {
+	if (!(lc()->isF() && rc()->isD())) return false;
+	int op = lc()->cname;
+	if (!(op >= iSin && op <= iExp)) return false;
+
+	term * ret = NULL;
+	if (op == iSin) {
+		assert(rc()->isfloat);
+		ret = new_term_float(sin(rc()->numf));
+	} else if (op == iCos) {
+		assert(rc()->isfloat);
+		ret = new_term_float(cos(rc()->numf));
+	} else if (op == iSqrt) {
+		assert(rc()->isfloat);
+		ret = new_term_float(sqrt(rc()->numf));
+	} else if (op == iExp) {
+		assert(rc()->isfloat);
+		ret = new_term_float(exp(rc()->numf));
+	}
+	<<simplify update pointers>>
+        return true;
+}
+@ %def simplifyMath
+
+\begin{comment}\label{com:beta reduction}
+The $\beta$-reduction rule\index{$\beta$-reduction rule} 
+$(\lambda x.{\bf u}\; t) = {\bf u}\{x/t\}$
+in the booleans module is not really a valid program statement. 
+(The leftmost symbol on the LHS of the equation is not a function symbol.)
+It should therefore be thought of as a part of the internal
+simplification routine of Escher.
+This rule is also the first among a few we will encounter where
+sharing of nodes in the current term is not safe because of the
+appearance of term substitutions on the RHS of the
+equation.\index{node sharing!unsafe} 
+(See Comments \ref{com:embedded conjunctively rule},
+\ref{com:existential rule} and \ref{com:universal rule} for the other
+such rules. 
+The existence and (heavy) use of such rules in Escher is one
+important reason I gave up on sharing of nodes. 
+See Comment \ref{com:on sharing} for a more detailed discussion on
+  the advantages and disadvantages of sharing.)
+In a typical program statement $h = b$ without term substitutions in
+the body, rewriting a subterm that is $\alpha$-equivalent
+(see \S \ref{subsec:pattern matching} for the exact details) to $h$ in
+the current term with $b$ involves only the creation and destruction
+of terms and redirection of pointers to terms. 
+No actual modification to an atomic term embedded inside the current
+term actually takes place, which means sharing is always safe.
+This scenario is no longer true when term substitutions appear in the
+body of statements.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::betaReduction(term * parent, unint id) {
+        if (lc()->isAbs() == false) return false;
+
+        substitution bind(lc()->fields[0]->cname, rc());
+        lc()->fields[1]->subst(bind);
+        term * ret = lc()->fields[1]->reuse();
+	<<simplify update pointers>>
+        return true;
+}
+@ %def betaReduction 
+
+\begin{comment}\label{ite system rule}
+This implements the rule
+\begin{gather*} 
+\it{if}\;(x = s)\;\it{then} \;w\;\it{else}\;z = 
+     \it{if}\;(x = s)\;\it{then} \;w\{x/s\}\;\it{else}\;z \\
+\hspace{4em} \text{- - where $x$ is a variable with a free occurrence in $w$.} 
+\end{gather*}
+This rule is relatively new and is first needed in Bayesian tracking 
+applications.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::simplifyIte(term * parent, unint id) {
+	if (!lc()->isF(iIte)) return false;
+	term * cond = rc()->fields[0];
+	if (!cond->isFunc2Args(iEqual)) return false;
+	if (!cond->lc()->rc()->isVar()) return false;
+	int vname = cond->lc()->rc()->cname;
+	if (!rc()->fields[1]->occursFree(vname)) return false;
+	substitution bind(vname, cond->rc());
+	rc()->fields[1]->subst(bind);
+	return true;
+}
+@ %def simplifyIte 
+
+\begin{comment}\label{com:embedded conjunctively rule}
+This function implements the following conjunction rule:
+\begin{equation}\label{eq:conjunction rule}
+{\bf u} \wedge ({\bf x} = {\bf t}) \wedge {\bf v} =
+     {\bf u}\{{\bf x}/{\bf t}\} \wedge ({\bf x} = {\bf t}) \wedge
+     {\bf v}\{{\bf x}/{\bf t}\}. 
+\end{equation}
+Here, ${\bf t}$ is not a variable and ${\bf x}$ is a variable free in
+${\bf u}$ or ${\bf v}$ or both, but not free in ${\bf t}$.
+The LHS of the equation is supposed to capture every term
+that has a subterm $({\bf x} = {\bf t})$ embedded conjunctively (see
+Definition \ref{def:embedded conjunctively}) inside it.
+All the variables in the rule are syntactical variables because a
+subterm that pattern matches with the LHS of the equation can occur
+inside a term that binds the variable $x$, in which case the standard
+term substitution routine will not give us what we want.\\
+
+\noindent The condition that ${\bf t}$ is not a variable is important.
+If ${\bf t}$ is a free variable and we interpret $({\bf x} = {\bf t})$
+to stand for $({\bf x} = {\bf t})$ or $({\bf t} = {\bf x})$, I think
+the correct interpretation, then loops can result from repeated
+application of the rule. 
+In \cite{lloyd99programming}, the statement
+\[ (t = x) = (x = t) \;\;\text{where $x$ is a variable, and $t$ is not a
+  variable} \]
+is used to capture the symmetry between ${\bf x}$ and ${\bf t}$ in the
+rule. 
+In the current implementation, we do away with the swapping rule and
+implement the symmetry directly to gain better efficiency.
+The condition that ${\bf t}$ is not a variable does not appear in
+\cite{lloyd03logic-learning}; this suggests that the rule as it
+appears in the book is either loopy or incomplete, depending on how
+one interprets the rule.\\
+
+\noindent There is another {\emph small} problem with the rule.
+Note that I have been calling it a rule, not a statement. Why?
+In any instantiation of the rule, the variable ${\bf x}$ must occur
+free in at least two places, which means the instantiation cannot be a 
+statement because of the no repeated free variables condition.
+\emph{This error appears in every description of Escher before 22
+Sep 2005, the day it was discovered.}
+The use of this rule, among other things, affects the run-time type
+checking is unnecessary result (See Proposition 5.1.3 in
+\cite{lloyd03logic-learning}).
+This is not as bad as it sounds; we only have to type-check every time
+we use the conjunction rule, {\emph not} after every computation step.
+\end{comment}
+
+\begin{problem}
+What is the cost, in terms of expressiveness, of omitting this rule?
+\end{problem}
+
+\begin{definition}\label{def:embedded conjunctively}
+A term $t$ is embedded conjunctively in $t$ and, if $t$ is embedded
+conjunctively in $r$ (or $s$), then $t$ is embedded conjunctively in
+$r \wedge s$.\index{embedded conjunctively}
+\end{definition}
+
+\begin{comment}
+We could implement the rule completely using the following set of statements.
+\begin{gather*}
+(({\bf x} = {\bf t}) \wedge {\bf u}) = (({\bf x} = {\bf t}) \wedge
+  {\bf u}\{{\bf x}/{\bf t}\}) \\ 
+({\bf u} \wedge ({\bf x} = {\bf t})) = (({\bf x} = {\bf t}) \wedge
+  {\bf u}) \\
+\hspace{6em} \text{where ${\bf u}$ does not have the form $(y = s)$
+  for some terms $y$ and $s$.}\\
+((({\bf x} = {\bf t}) \wedge {\bf u}) \wedge {\bf v}) = (({\bf x} =
+  {\bf t}) \wedge ({\bf u} \wedge {\bf v})) \\
+({\bf u} \wedge (({\bf x} = {\bf t}) \wedge {\bf v})) = (({\bf x} =
+  {\bf t}) \wedge ({\bf u} \wedge {\bf v})) \\
+\hspace{6em} \text{where ${\bf u}$ does not have the form $(y = s)$
+  for some terms $y$ and $s$.}
+\end{gather*}
+The last three statements can bring out conjunctively embedded
+equations to the front of the term, which can then be simplified using
+the first statement.
+A loop can occur if the side conditions in the second and fourth
+statements are not imposed.
+\end{comment}
+
+\begin{comment}
+Notice that we do not need the {\tt parent} pointer for this
+particular rewriting.
+\end{comment}
+
+\begin{comment}
+In the following, we first check that the current term has the right
+form, then we find (using {\tt findEq} (see Comment \ref{com:findEq})) 
+a variable-instantiating equation inside the current term.
+By a variable-instantiating equation I mean a (sub)term having the
+form $(x = t)$ embedded conjunctively inside the current term which
+satisfies all the side conditions of Equation \ref{eq:conjunction rule}.
+(If there are more than one variable-instantiating equation, the leftmost
+ is selected.
+ Subsequent calls to {\tt findEq} on the current term (rewritten using
+ Equation \ref{eq:conjunction rule}) will find the remaining
+ variable-instantiating equations in the left-to-right order.)
+If no such equation exists, {\tt findEq} returns a null pointer.
+We rename the $x$ in $(x = t)$ temporarily so that it does not get
+substituted with $t$ by {\tt subst}.
+Since we will not call {\tt freememory} on the current term, we need
+to {\tt reuse} the term {\tt p->fields[1]} when creating {\tt bind} to
+make sure the term substitution works as expected.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::simplifyConjunction() {
+        term * p = findEq(this); if (p == NULL) return false;
+
+        term * varp = p->lc()->rc();
+	varp->freeze = true;
+
+        substitution bind(varp->cname, p->fields[1]->reuse());
+        subst(bind); p->fields[1]->refcount--;
+	varp->freeze = false;
+
+        return true;
+}
+@ %def simplifyConjunction
+
+\begin{comment}\label{com:findEq}
+The function {\tt findEq} seeks a variable-instantiating equation
+inside the {\tt root} term with the help of {\tt isEq}.
+The function {\tt findEq} assumes that the calling term is a
+conjunction of the form $t_1 \wedge t_2$. 
+(See Definition \ref{def:embedded conjunctively}.)
+If $t_1$ is a variable-instantiating equation, we return.
+Otherwise, we recurse on $t_1$ if it has the right (conjunctive) form.
+Then we do the same on $t_2$.
+This gives us the left-to-right selection order.
+\end{comment}
+
+<<term::function definitions>>=
+term * term::findEq(term * root) {
+        term * p = NULL;
+        term * t1 = lc()->rc(); 
+        if (t1->isEq(root)) return t1;
+        if (t1->isFunc2Args(iAnd)) { p = t1->findEq(root); if (p) return p; }
+
+        term * t2 = rc(); 
+        if (t2->isEq(root)) return t2;
+        if (t2->isFunc2Args(iAnd)) { p = t2->findEq(root); if (p) return p; }
+        return NULL;
+}
+@ %def findEq
+
+\begin{problem}
+Getting {\tt findEq} to run fast is an interesting search problem.
+The first question is whether left-to-right is the right search order?
+We can implement top-to-bottom search by {\tt isEq}ing $t_1$ and $t_2$
+first, followed by recursion into each of them.
+Would that be better?
+Another question is can we improve search time by representing
+conjunctive terms differently, for example in a flat representation?
+Or if we do stick with the tree representation, can we augment nodes
+(in the spirit of binary search algorithms) to make the search go
+faster?  
+\end{problem}
+
+\begin{comment}
+This function checks whether the current term is a
+variable-instantiating term, that is, whether it has the form 
+$(t_1 = t_2)$, where $t_1$ is a variable, $t_2$ is a (non-variable) 
+term such that $t_1$ does not occur free in it, and $t_1$ occurs free
+{\emph elsewhere} in the term {\tt root}.
+Note the symmetry between $t_1$ and $t_2$.
+We {\emph must} check both because any one of them can turn out to be the
+variable that satisfies all the conditions.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::isEq(term * root) {
+        if (isFunc2Args(iEqual) == false) return false;
+        term * t1 = lc()->rc(), * t2 = rc();
+        if (t1->isVar() && t2->isVar() == false) {
+                if (t2->occursFree(t1->cname) == false) {
+			t1->freeze = true;
+			if (root->occursFreeNaive(t1->cname)) {
+				t1->freeze = false; return true; }
+			t1->freeze = false;
+                }}
+        if (t2->isVar() && t1->isVar() == false) {
+                if (t1->occursFree(t2->cname) == false) {
+			t2->freeze = true;
+			bool ret = root->occursFreeNaive(t2->cname);
+			t2->freeze = false;
+                        if (ret) { <<isEq::switch t1 and t2>> }
+                        return ret;
+                }}
+        return false;
+}
+@ %def isEq
+
+\begin{comment}
+We use {\tt occursFreeNaive} for {\tt root} here because the temporary
+variable renaming we do affects the correctness of the caching of
+computed free variables. 
+(Note: We no longer do variable renaming, do we still really need to
+use {\tt occursFreeNaive}?
+\end{comment}
+
+\begin{comment}
+We need to swap $t_1$ and $t_2$ because procedures that call 
+{\tt findEq} expect the variable that satisfies all the conditions to
+be on the LHS of the equation.
+\end{comment}
+
+<<isEq::switch t1 and t2>>=
+term * temp = t1; lc()->fields[1] = t2; fields[1] = temp;
+@ 
+
+\begin{comment}
+Example execution of {\tt simplifyConjunction}.
+\begin{verbatim}
+    Query: ((&& y) ((&& ((== x) T1)) ((&& ((== T2) y)) x)))
+    Time = 1 Answer: ((&& y) ((&& ((== x) T1)) ((&& ((== T2) y)) T1)))
+    Time = 2 Answer: ((&& T2) ((&& ((== x) t1)) ((&& ((== y) T2)) T1)))
+\end{verbatim}
+There are two variable-instantiating equations in the query.
+It is easy to get this wrong if one is not careful.
+\end{comment}
+
+\begin{comment}
+We next look at the implementation of the rules
+\begin{gather}
+{\bf u} \wedge (\exists x_1.\cdots\exists x_n.{\bf v}) =
+    \exists x_1.\cdots\exists x_n.({\bf u} \wedge {\bf v}) \\
+(\exists x_1.\cdots\exists x_n.{\bf v}) \wedge {\bf u} =
+    \exists x_1.\cdots\exists x_n.({\bf v} \wedge {\bf u})
+\end{gather}
+Note that the convention on syntactic variables dictate that none of
+the variables $x_i$ can appear free in ${\bf u}$.
+The two rules can be captured by repeated applications of the following
+two special cases of the rules
+\begin{gather}
+\label{eq:conjunction existential 1}
+{\bf u} \wedge (\exists x.{\bf v}) =
+    \exists x.({\bf u} \wedge {\bf v}) \\
+\label{eq:conjunction existential 2}
+(\exists x.{\bf v}) \wedge {\bf u} = \exists x.({\bf v} \wedge {\bf u})
+\end{gather}
+and these are what we will actually implement.
+We choose to implement these easier rules because checking that each
+$x_i$ is free in ${\bf u}$ would be an expensive exercise.\\
+
+\noindent Interestingly, it is actually quite important to get the
+order of $\bu$ and $\bv$ right in the conjunction.
+For example, implementing 
+\[ (\exists x.\bv) \wedge \bu = \exists x.(\bu \wedge \bv) \]
+instead of Statement \ref{eq:conjunction existential 2} will seriously
+slow down the predicate $\mathit{permute}$ 
+(see Sect. \ref{sec:list module}). 
+\end{comment}
+
+<<term::function definitions>>=
+bool term::simplifyConjunction2(term * parent, unint id) {
+        term * t1 = lc()->rc(), * t2 = rc();
+        term * sigma, * other;
+        if (t2->isApp() && t2->lc()->isF(iSigma)) {
+                sigma = t2; other = t1;
+        } else if (t1->isApp() && t1->lc()->isF(iSigma)) {
+                sigma = t1; other = t2;
+        } else return false;
+
+        int var = sigma->rc()->fields[0]->cname;
+        if (other->occursFree(var)) return false;
+
+        <<simplifyConjunction2::create body>>
+        <<simplify update pointers>>
+        return true;
+}
+@ %def simplifyConjunction2
+
+\begin{comment}
+We could recycle $\exists x$ but choose not to.
+\end{comment}
+
+<<simplifyConjunction2::create body>>=
+term * con = newT2Args(F, iAnd);
+if (sigma == t2) 
+	con->initT2Args(other->reuse(), sigma->rc()->fields[1]->reuse());
+else con->initT2Args(sigma->rc()->fields[1]->reuse(), other->reuse()); 
+term * abs = new_term(ABS);
+// abs->lc = new_term(V, var); abs->rc = con;
+abs->insert(new_term(V, var)); abs->insert(con);
+term * ret = new_term(APP);
+// ret->lc = new_term(F, iSigma); ret->rc = abs;
+ret->insert(new_term(F, iSigma));  ret->insert(abs);
+@ 
+
+\begin{comment}
+Example execution of {\tt simplifyConjunction2}.
+\begin{verbatim}
+Query: ((&& (sigma \x1.(sigma \x2.v))) u)
+Time = 1 Answer: (sigma \x1.((&& u) (sigma \x2.v)))
+Time = 2 Answer: (sigma \x1.(sigma \x2.((&& u) v)))
+\end{verbatim}
+\end{comment}
+
+\begin{comment}
+The use of Statements \ref{eq:conjunction existential 1} and
+\ref{eq:conjunction existential 2} introduces a peculiar behaviour
+into Escher in that the same query, when asked using two different
+variable names, can result in two different computation sequences.
+To illustrate this, consider the following statement:
+\begin{gather*}
+ f : Int \times (Int \rightarrow \varOmega) \rightarrow \varOmega \\
+ f (x,s) = (x \leq 8) \wedge \exists z.(z \in s \wedge (\mathit{prime}\;z)).
+\end{gather*}
+Now, if we ask Escher to compute the value of $f (y,\{2,3\})$, we get
+\begin{align*}
+f (y,\{2,3\}) &= (y \leq 8) \wedge \exists z.(z \in \{2,3\} \wedge
+                   (\mathit{prime}\;z)) \\
+    &= \exists z.((y \leq 8) \wedge z \in \{2,3\} \wedge
+                   (\mathit{prime}\;z))\\
+    &= \ldots \\
+    &= \exists z.((y \leq 8) \wedge (z = 2)) \\
+    &= (y \leq 8).        
+\end{align*}
+However, if we ask Escher to compute the value of $f (z,\{2,3\})$, we
+will get 
+\begin{align*}
+f (z,\{2,3\}) &= (z \leq 8) \wedge \exists z.(z \in \{2,3\} \wedge
+                   (\mathit{prime}\;z)) \\
+ &= \ldots \\
+ &= (z \leq 8) \wedge \exists z.(z = 2) \\
+ &= (z \leq 8) \wedge \top \\
+ &= (z \leq 8).
+\end{align*}
+The two computation sequences are different from the second step
+onwards.
+The second sequence takes one step longer than the first.
+Just about the only comforting thing is that the end results are
+equivalent.
+The questions then are
+\begin{enumerate}
+ \item Should we retain Statements  
+   \ref{eq:conjunction existential 1} and \ref{eq:conjunction existential 2}
+   in the booleans module? 
+   Judging from the (limitted set of) test programs I have, there is
+   no actual need for the two statements.
+   In general, I believe they make certain computations go faster,
+   although one can also show instances where they actually make
+   things go slightly slower.
+ \item If we retain the two statements, should we modify the
+   convention so that a variable renaming is done to make them
+   applicable in cases where they cannot be applied?
+\end{enumerate}
+\end{comment}
+
+\begin{comment}\label{com:existential rule}
+This function implements the following existential rules:
+\begin{gather}
+ \exists x_1.\cdots\exists x_n.\top = \top \label{eq:existential true}\\
+ \exists x_1.\cdots\exists x_n.\bot = \bot \label{eq:existential false}\\
+ \exists x_1.\cdots\exists x_n.({\bf x} \wedge (x_1 = {\bf u})
+  \wedge {\bf y}) = \exists x_2.\cdots\exists x_n.
+  ({\bf x}\{x_1/{\bf u}\} \wedge \top \wedge 
+   {\bf y}\{x_1/{\bf u}\}).\label{eq:existential ceeq}
+\end{gather}
+The other rules are implemented in the Booleans module.
+See Comment \ref{com:booleans:existential}.
+I suppose they can be implemented here if we really need to maximise
+efficiency at the price of complicated code.
+\end{comment}
+
+\begin{comment}
+We first check whether the current term starts with 
+$\exists x_1\cdots\exists x_n$.
+We then move to the subterm after $\exists x_1\cdots\exists x_n$ and
+perform surgery on it if possible.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::simplifyExistential(term * parent, unint id) {
+        if (fields[0]->isF(iSigma) == false) return false;
+
+        term * ret = NULL; term * p = NULL;
+        int var = rc()->fields[0]->cname;
+        substitution bind;
+
+        <<simplifyExistential::move to the body>>
+
+        <<simplifyExistential::case one and two>>
+        <<simplifyExistential::tricky case>>
+
+simplifyExistential_cleanup:
+        <<simplify update pointers>>
+        return true;
+}
+@ %def simplifyExistential
+
+\begin{comment}
+The following allows us to move past the remaining $\exists x_i$ to
+get to the body of the term.
+% Here {\tt bdparent->fields[1]} points to {\tt body}.
+% This pointer is useful if we need to modify the body.
+\end{comment}
+
+<<simplifyExistential::move to the body>>=
+term * body = fields[1]->fields[1]; 
+while (body->isApp() && body->lc()->isF(iSigma)) {
+        body = body->rc()->fields[1]; 
+}
+@ 
+
+\begin{comment}
+This handles Statements \ref{eq:existential true} and 
+\ref{eq:existential false}.
+Completeness of specification is not an issue here.
+The two statements can be captured by repeated application of the
+statements 
+\[ \exists x.\top = \top \;\;\text{and}\;\; \exists x.\bot = \bot. \]
+Making them part of the internal simplification routine gives us
+efficiency advantages.
+\end{comment}
+
+<<simplifyExistential::case one and two>>=
+if (body->isD(iTrue) || body->isD(iFalse)) {
+        ret = body->reuse(); goto simplifyExistential_cleanup; }
+@ 
+
+\begin{comment}
+We next discuss Statement \ref{eq:existential ceeq}.
+The pattern in the head of Statement \ref{eq:existential ceeq}  
+should be interpreted in the same way as the corresponding pattern in
+the conjunction rule described in 
+Comment \ref{com:embedded conjunctively rule}.
+Note that the statement is slightly different from that given in
+\cite{lloyd03logic-learning}, which takes the following form:
+\[ \exists x_1.\cdots\exists x_n.({\bf x} \wedge (x_i = {\bf u})
+    \wedge {\bf y}) = 
+    \exists x_1.\cdots\exists x_{i-1}.\exists x_{i+1}.\cdots \exists x_n.
+    ({\bf x}\{x_i/{\bf u}\} \wedge {\bf y}\{x_i/{\bf u}\}). 
+\]
+First, restricting $x_i$ to be $x_1$ as we did incurs a small
+computational cost in that we need to move to the subterm starting
+with $\exists x_i$ during pattern matching to apply Statement
+\ref{eq:existential ceeq}. 
+In return, we can write simpler code.
+The second change is that instead of dropping the term $(x_1 = {\bf u})$, 
+we put a $\top$ in its place. 
+The two expressions are equivalent, of course.
+The advantage of that is the same: we can write simpler code.
+Another advantage of this latter change is that, unlike the original
+statement, we do end up with a natural special case. 
+(See Comment \ref{com:existential ceeq special case}.)
+\end{comment}
+
+<<simplifyExistential::tricky case>>=
+<<simplifyExistential::tricky case::special case>>
+<<simplifyExistential::tricky case::general case>>
+@ 
+
+\begin{comment}\label{com:existential ceeq special case}
+A special case of Statement \ref{eq:existential ceeq} is the following:
+\begin{equation}\label{eq:existential ceeq special case}
+ \exists x_1.\cdots\exists x_n.(x_1 = {\bf u}) 
+   = \exists x_2.\cdots\exists x_n.\top.
+\end{equation}
+The body of the statement can be further simplified to $\top$, of course.
+\end{comment}
+
+<<simplifyExistential::tricky case::special case>>=
+if (body->isEq(var)) { ret = new_term(D, iTrue);
+                       goto simplifyExistential_cleanup; }
+@ 
+
+\begin{comment}
+In the general case, we first check that the body has the overal form
+$t_1 \wedge t_2$.
+Then we attempt to find in the body an equation that instantiates the
+first quantified variable and replaces it with $\top$.
+(This is performed all at the same time by {\tt replaceEq}.)
+If that operation is successful, we perform term substitutions on the
+body and then get rid of the first quantification. 
+\end{comment}
+
+<<simplifyExistential::tricky case::general case>>=
+if (body->isFunc2Args(iAnd) == false) return false;
+p = body->replaceEq(var); if (p == NULL) return false;
+        
+bind.first = p->lc()->rc()->cname; bind.second = p->fields[1];
+body->subst(bind);
+p->freememory();
+
+ret = rc()->fields[1]->reuse();
+@ 
+
+\begin{comment}\label{com:find eq}
+The function {\tt replaceEq} finds a subterm of the form $(x = t)$
+embedded conjunctively inside a term (with the help of {\tt isEq}), 
+replaces it with $\top$ and then returns a pointer to $(x = t)$. 
+\end{comment}
+
+\begin{comment}
+We assume that the calling term is a conjunction of the form $t_1 \wedge t_2$.
+If $t_1$ is a variable-instantiating equation, we return.
+Otherwise, we recurse on $t_1$ if it has the right (conjunctive) form.
+Then we do the same on $t_2$.
+(See also Comment \ref{com:findEq}.)
+\end{comment}
+
+<<term::function definitions>>=
+term * term::replaceEq(int var) {
+        term * p = NULL;
+        term * t1 = lc()->rc();
+        if (t1->isEq(var)) { 
+                lc()->fields[1] = new_term(D, iTrue); return t1; }
+        if (t1->isFunc2Args(iAnd)) { p = t1->replaceEq(var); if (p) return p; }
+
+        term * t2 = rc();
+        if (t2->isEq(var)) { fields[1] = new_term(D, iTrue); return t2; } 
+        if (t2->isFunc2Args(iAnd)) { p = t2->replaceEq(var); if (p) return p; }
+        return NULL;
+}
+@ %def replaceEq
+
+\begin{comment}
+This function checks whether the current term has the form $(x = t)$ 
+where $x$ is the input variable and $t$ is a term such that $x$ does not
+occur free in $t$.
+If the current term has the form $(t = x)$ where $x$ does not occur
+free in $t$, we need to swap the two arguments because procedures that
+call {\tt replaceEq} expect the variable $x$ to be on the LHS of the
+equation.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::isEq(int x) {
+        if (isFunc2Args(iEqual) == false) return false;
+        term * t1 = lc()->rc(), * t2 = rc();
+
+        if (t1->isVar(x) && t2->occursFree(x) == false) return true;
+        if (t2->isVar(x) && t1->occursFree(x) == false) {
+                <<isEq::switch t1 and t2>> 
+                return true; }
+        return false;
+}
+@ %def isEq
+
+\begin{comment}
+Example execution of {\tt simplifyExistential}.
+\begin{verbatim}
+Query: (sigma \x3.(sigma \x2.(sigma \x1.((== x3) t1))))
+Time = 1 Answer: True
+
+Query: (sigma \x3.(sigma \x.(sigma \y.(&& y (&& (== x T1) (&& (== t2 y) x))))))
+Time = 1 Answer: (sigma \x3.(sigma \y.(&& y (&& True (&& (== t2 y) T1)))))
+Time = 2 Answer: (sigma \x3.(&& t2 (&& True (&& True T1))))
+Time = 3 Answer: (sigma \x3.(&& t2 (&& True T1)))
+Time = 4 Answer: (sigma \x3.(&& t2 T1))
+\end{verbatim}
+\end{comment}
+
+\begin{comment}\label{com:universal rule}
+This function implements the following universal rules:
+\begin{gather}
+\label{eq:universal true}
+\forall x_1.\cdots\forall x_n.(\bot \rightarrow \bu) = \top \\
+\label{eq:universal ceeq}
+ \forall x_1.\cdots\forall x_n.({\bf x} \wedge (x_1 = {\bf u})
+\wedge {\bf y} \rightarrow {\bf v}) =
+   \forall x_2.\cdots\forall x_n.(
+   ({\bf x} \wedge \top \wedge {\bf y} \rightarrow {\bf v})\{x_1/{\bf u}\}).
+\end{gather}
+Statement \ref{eq:universal ceeq} is equivalent to the following rule
+given in \cite{lloyd03logic-learning}:
+\[ \forall x_1.\cdots\forall x_n.({\bf x} \wedge (x_1 = {\bf u})
+\wedge {\bf y} \rightarrow {\bf v}) =
+   \forall x_1.\cdots\forall x_{i-1}.\forall x_{i+1}.\cdots\forall x_n.(
+     ({\bf x} \wedge {\bf y} \rightarrow {\bf v})\{x_i/{\bf u}\}). \]
+\end{comment}
+
+<<term::function definitions>>=
+bool term::simplifyUniversal(term * parent, unint id) {
+        if (lc()->isF(iPi) == false) return false;
+        
+        int var = rc()->fields[0]->cname;
+        <<simplifyUniversal::check the form of body>>
+        <<simplifyUniversal::true statement>>
+        <<simplifyUniversal::special case>>
+        <<simplifyUniversal::general case>>
+}
+@ %def simplifyUniversal
+
+\begin{comment}
+We move past the remaining $\forall$s to get to the body and check
+whether it has the form $t_1 \rightarrow t_2$.
+If so, we move to $t_1$.
+\end{comment}
+
+<<simplifyUniversal::check the form of body>>=
+term * body = rc()->fields[1];
+while (body->isApp() && body->lc()->isF(iPi)) 
+        body = body->rc()->fields[1];
+if (body->isFunc2Args(iImplies) == false) return false;
+term * t1 = body->lc()->rc();
+@ 
+
+\begin{comment}
+This code chunk implements Statement \ref{eq:universal true}.
+\end{comment}
+
+<<simplifyUniversal::true statement>>=
+if (t1->isD(iFalse)) { term * ret = new_term(D, iTrue);
+                        <<simplify update pointers>>
+                        return true; }
+@ 
+
+\begin{comment}
+A special case of Statement \ref{eq:universal ceeq} is the following:
+\[ \forall x_1.\cdots\forall x_n.((x_1 = {\bf u}) \rightarrow {\bf v}) =
+   \forall x_2.\cdots\forall x_n.(\top \rightarrow {\bf v})\{x_1/{\bf u}\} =
+  \forall x_2.\cdots\forall x_n.{\bf v}\{x_1/{\bf u}\}. \]
+\end{comment}
+
+<<simplifyUniversal::special case>>=
+if (t1->isEq(var)) {
+        term * t2 = body->rc();
+        substitution bind(t1->lc()->rc()->cname, t1->rc());
+        t2->subst(bind);
+        body->replace(t2->reuse());
+        t2->freememory();
+        <<simplifyUniversal::change end game>>
+}
+@ 
+
+\begin{comment}
+After changing the body, we remove the quantifier of $x_1$ and return.
+\end{comment}
+
+<<simplifyUniversal::change end game>>=
+term * ret = rc()->fields[1]->reuse();
+<<simplify update pointers>>
+return true;
+@ 
+
+\begin{comment}
+We first check whether the LHS of $\rightarrow$ has the form 
+$t_3 \wedge t_4$.
+If so, we seek to find an equation instantiating the first quantified
+variable and replace it with $\top$. 
+(This is again done using {\tt replaceEq}.)
+Then we make the necessary term substitutions and return. 
+\end{comment}
+
+<<simplifyUniversal::general case>>=
+if (t1->isFunc2Args(iAnd) == false) return false;
+term * p = t1->replaceEq(var); if (p == NULL) return false;
+
+substitution bind(p->lc()->rc()->cname, p->fields[1]);
+body->subst(bind);
+p->freememory();
+
+<<simplifyUniversal::change end game>>
+@ 
+
+\begin{comment}
+Example execution of {\tt simplifyUniversal}.
+\begin{verbatim}
+Query: (pi \x2.(pi \x1.(pi \x3.((implies ((== x1) t1)) ((&& x1) x1)))))
+Time = 1 Answer: (pi \x2.(pi \x3.((&& t1) t1)))
+
+Query: (pi \x3.(pi \x1.(pi \x2.((implies ((&& ((== True) x2)) 
+                                  ((&& ((== x1) True)) ((&& x1) x2)))) t1))))
+Time = 1 Answer: (pi \x3.(pi \x2.((implies ((&& ((== True) x2)) 
+                                  ((&& True) ((&& True) x2)))) t1)))
+Time = 2 Answer: (pi \x3.((implies ((&& True) ((&& True) (&& True True)))) t1))
+Time = 3 Answer: (pi \x3.((implies ((&& True) ((&& True) True))) t1))
+Time = 4 Answer: (pi \x3.((implies ((&& True) True)) t1))
+Time = 5 Answer: (pi \x3.((implies True) t1))
+Time = 6 Answer: (pi \x3.t1)
+\end{verbatim}
+\end{comment}
+
+\begin{comment}
+This next function implements the rules
+\begin{gather*}
+\square_i {\bf t} = {\bf t} \;\;\; \text{if ${\bf t}$ is rigid.} \\
+(\square_i {\bf s} \; {\bf t}) = \square_i ({\bf s}\;{\bf t}) \;\;\;\text{if ${\bf t}$ is rigid.}
+\end{gather*}
+\end{comment}
+
+<<term::function definitions>>=
+bool term::simplifyModalTerms(term * parent, unint id) {
+	if (isModal()) {
+		if (!isRigid()) return false;
+		term * ret = fields[0]->reuse();
+		<<simplify update pointers>>
+		return true;
+	}
+	if (isApp() && lc()->isModal() && lc()->fields[0]->isF()) {
+		if (!rc()->isRigid()) return false;
+		term * ret = new_term(MODAL);
+		ret->modality = lc()->modality;
+		term * temp = new_term(APP);
+		/* temp->lc = lc->lc->reuse();
+		temp->rc = rc->reuse();
+		ret->lc = temp; */
+		temp->insert(lc()->fields[0]->reuse());
+		temp->insert(rc()->reuse());
+		ret->insert(temp);
+		<<simplify update pointers>>
+		return true;
+	}
+	return false;
+}
+@ %def simplifyModalTerms
+
+
+\newpage
+
+%%import redexes.nw
+
+\newpage
+\subsection{Pattern Matching}\label{subsec:pattern matching}
+
+\subsubsection{Preprocessing of Statements}
+\label{subsubsec:statement preprocessing}
+
+\begin{comment}\label{com:collectSharedVars}
+During pattern matching, the name of bound variables in the head of a
+program statement $s = t$ needs to be changed repeatedly.
+The corresponding variables in $t$ must be changed accordingly to
+preserve the original meaning of the statement.
+As this is a key operation that needs to be done repeatedly very many
+times, an efficient algorithm is needed.
+The key idea here is that we can use the same variable node to
+represent corresponding variables in $s$ and $t$.
+This way, when we change a variable in $s$ during pattern matching,
+all corresponding variables in $s$ and $t$ get changed automatically.
+The term representations produced by the parser are trees without
+shared node.
+The following function {\tt collectSharedVars} implements this kind of
+sharing.
+The procedure is simple.
+We first collect together all the shared variables in $s$ and $t$
+separately using {\tt shareLambdaVars}.
+Then we redirect shared variables in $t$ to their corresponding
+variables in $s$ using {\tt shareHeadLambdaVars}.\\
+
+\noindent Note that only bound variables are shared by this operation. 
+The correctness of the function {\tt labelStaticBoundVars} (see Comment
+\ref{com:labelStaticBoundVars}) is thus not affected.
+\end{comment}
+
+<<term::function definitions>>=
+void term::collectSharedVars() {
+        term * head = fields[0]->fields[1];
+        term * body = fields[1];
+        vector<term *> headlvars;
+        head->shareLambdaVars(headlvars, true);
+        body->shareLambdaVars(headlvars, false);
+        body->shareHeadLambdaVars(headlvars);
+}
+@ %def collectSharedVars
+
+\begin{comment}
+The input vector {\tt lvars} is used to collect all the lambda
+variables in a term.
+We only need to do this for the head.
+The input parameter {\tt use} controls this.
+The procedure of {\tt shareLambdaVars} is as follows: 
+every time we see a term of the form $\lambda x.t$, we use {\tt shareVar}
+to redirect all occurrences of $x$ in $t$ to point to the $x$ straight
+after the $\lambda$ sign.
+\end{comment}
+
+<<term::function definitions>>=
+void term::shareLambdaVars(vector<term *> & lvars, bool use) {
+        if (tag == ABS) {
+                if (use) lvars.push_back(fields[0]);
+                fields[1]->shareVar(fields[0], this, 1);
+                fields[1]->shareLambdaVars(lvars, use);
+                return;
+        }
+        int size = fieldsize;
+        for (int i=0; i!=size; i++)
+                fields[i]->shareLambdaVars(lvars, use);
+}
+@ %def shareLambdaVars
+
+\begin{comment}
+The procedure {\tt shareVar} with input variable $x$ is only ever
+called within the correct scope $t$ of a term $\lambda x.t$.
+(If a subterm $\lambda x.t_2$ occurs inside $t$, we will skip that subterm.)  
+This guarantees that all the variables that get redirected in the 
+{\tt (tag == V)} case are exactly those variables bound by the input
+variable {\tt var}.
+The pointer {\tt parent->fields[id]} points to the current term.
+\end{comment}
+
+<<term::function definitions>>=
+void term::shareVar(term * var, term * parent, unint id) {
+        if (tag == SV || tag == D || tag == F) return;
+        if (tag == ABS) { if (var->cname == fields[0]->cname) return;
+                          fields[1]->shareVar(var, this, 1); return; }
+        if (tag == V) {
+                if (cname == var->cname) {
+                        parent->fields[id] = var->reuse();
+                        var->parents.push_back(&parent->fields[id]);
+                        this->freememory(); }
+                return;
+        }
+        unint size = fieldsize;
+        for (unint i=0; i!=size; i++) fields[i]->shareVar(var, this, i);
+}
+@ %def shareVar
+
+\begin{comment}
+Pointers to term schema pointers that got redirected in {\tt shareVar}
+are stored in {\tt parents}.
+These are then used for further redirection in {\tt shareHeadLambdaVars}.
+At present, this is the only place where {\tt parents} is used.
+The {\tt parents} parameter need not be initialized during term
+construction. 
+It need not be copied during cloning.
+Its value also does not get affected during replacing.
+\end{comment}
+
+<<term vector parts>>=
+vector<term **> parents;
+@ 
+
+\begin{comment}
+The procedure for {\tt shareHeadLambdaVars} is as follows.
+Every time we see a term of the form $\lambda x.t$, we redirect $x$
+and all occurrences of $x$ in $t$ pointing to it (these are recorded
+in {\tt parents}) if $x$ is in {\tt hlvars} and then we recurse on $t$.
+\end{comment}
+
+<<term::function definitions>>=
+void term::shareHeadLambdaVars(vector<term *> & hlvars) {
+        if (hlvars.empty()) return;
+        if (tag == ABS) {
+                int size = hlvars.size();
+                for (int i=0; i!=size; i++) {
+                        if (fields[0]->cname != hlvars[i]->cname) continue;
+                        int psize = fields[0]->parents.size();
+                        for (int j=0; j!=psize; j++) {
+                                *(fields[0]->parents[j]) = hlvars[i]->reuse();
+                                fields[0]->freememory();
+                        }
+                        fields[0]->freememory();
+                        fields[0] = hlvars[i]->reuse();
+                        break;
+                }
+                fields[1]->shareHeadLambdaVars(hlvars);
+                return;
+        }
+        int size = fieldsize;
+        for (int i=0; i!=size; i++)
+                fields[i]->shareHeadLambdaVars(hlvars);
+}
+@ %def shareHeadLambdaVars
+
+\begin{comment}\label{com:collectFreeVars}
+Free variables in program statements may also need to be changed during
+pattern matching.
+To do away with the need for tree traversal, we employ the same
+trick to share corresponding free variables in the head and body of
+statements. 
+This is done in a preprocessing step. 
+The following function performs this task.
+It works as follows.
+Every time we see a free variable $x$ in the head, we traverse the body to
+redirect all free occurrences of $x$ to the one in the head.
+Redirection is accomplished using {\tt shareFreeVar}.
+We assume that {\tt labelStaticBoundVars} has been called to label the
+variables. 
+\end{comment}
+
+<<term::function definitions>>=
+void term::collectFreeVars(term * bodyparent, unint id) {
+        if (tag == V && isFree()) 
+                bodyparent->fields[id]->shareFreeVar(this, bodyparent, id);
+        if (tag == SV || tag == D || tag == F) return;
+        if (tag == ABS) fields[1]->collectFreeVars(bodyparent, id);
+        int size = fieldsize;
+        for (int i=0; i!=size; i++)
+                fields[i]->collectFreeVars(bodyparent, id);
+}
+@ %def collectFreeVars
+
+\begin{comment}
+The return value of {\tt shareFreeVar} can be used to implement the
+idea described in Comment \ref{com:irrelevant free variables}.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::shareFreeVar(term * v, term * parent, unint id){
+        if (tag == V && isFree() && cname == v->cname) {
+                freememory(); parent->fields[id] = v->reuse(); return true; }
+
+        if (tag == SV || tag == D || tag == F) return false;
+        if (tag == ABS) return fields[1]->shareFreeVar(v, this, 1);
+        bool ret = false;
+        int size = fieldsize;
+        for (int i=0; i!=size; i++)
+                if (fields[i]->shareFreeVar(v, this, i)) ret = true;
+        return ret;
+}
+@ %def shareFreeVar
+
+\begin{comment}
+The following function pre-computes all the free variables inside a
+subterm and put them in the vector {\tt preFVars}.
+Pointers to terms instead of strings are used to allow us to rename
+free variables directly without doing another traversal.
+\end{comment}
+
+<<term parts>>=
+vector<term *> preFVars;
+
+<<term::function definitions>>=
+bool term::precomputeFreeVars() {
+        if (tag == SV || tag == D || tag == F) return false;
+        if (tag == V && isFree()) {
+	    preFVars.push_back(this);
+		return true;
+	}
+        if (tag == ABS) {
+               bool res = fields[1]->precomputeFreeVars(); 
+	       if (res) 
+		   preFVars = fields[1]->preFVars; 
+	       return res;
+	}
+        int size = fieldsize;
+        for (int i=0; i!=size; i++) {
+                bool res = fields[i]->precomputeFreeVars();
+		if (!res) continue;
+		int size2 = fields[i]->preFVars.size();
+		for (int j=0; j!=size2; j++)
+		    preFVars.push_back(fields[i]->preFVars[j]);
+        }
+	return !preFVars.empty();
+}
+@ %def precomputeFreeVars
+
+\begin{comment}\label{com:irrelevant free variables}
+UNIMPLEMENTED IDEA:
+A variable that occurs in the head but not in the body of a statement
+can be flagged so that we do not have to put its substitution in $\theta$.
+\end{comment}
+
+\subsubsection{Redex Determination}
+\begin{definition}
+A {\em redex} of a term $t$ is an occurrence of a subterm of $t$ that
+is $\alpha$-equivalent to an instance of the head of a statement.
+\end{definition}
+
+\begin{fact}
+Two $\alpha$-equivalent terms can only differ in the names of their
+bound variables. (See also \cite[pp. 71]{lloyd03logic-learning}.)
+\end{fact}
+
+\begin{algorithm}\label{alg:redex determination}
+To determine whether a term $t$ is a redex with respect to the head
+$h$ of a statement, we need to determine whether there exists a term
+substitution $\theta$ such that $h\theta$ is $\alpha$-equivalent to $t$.
+There is a simple algorithm for doing that:
+ \begin{quote}
+ $\theta \leftarrow \{\}$ \\
+ while $(h\theta \neq t)$ do 
+ \begin{quote}
+  $o \leftarrow$ leftmost innermost occurrence in $t$ such that $o$ is
+  also in $h$ and $h\theta_{|o} \neq t_{|o}$; \\
+  if $h\theta_{|o}$ and $t_{|o}$ are both $\lambda$-terms then
+  \begin{quote}
+   change name of bound variable in $h\theta_{|o}$ to that in $t_{|o}$, 
+   renaming free variables in $h\theta_{|o}$ to avoid free-variable
+   capture whenever necessary;
+  \end{quote}
+  else if
+  $h\theta_{|o}$ is a free occurrence of a variable $x$ in $h$ and
+          no free variable in $t_{|o}$ would be captured by the
+          substitution $\{x/t_{|o}\}$ then
+  \begin{quote}
+   $\theta \leftarrow \theta \cup \{x/t_{|o}\}$;
+  \end{quote}
+  else return failure;
+ \end{quote}
+ return $\theta$;
+\end{quote}
+\end{algorithm}
+
+\begin{comment}
+The no-free-variable-capture condition in the else if case is needed
+to prevent matching on statements like $h = \lambda y.x$ and 
+$t = \lambda y.(g\,y)$.
+Without the condition, we would bind $(g\,y)$ to $x$, but the end
+result of doing $h \{x/(g\,y)\}$ is actually $\lambda z.(g\,y)$, which
+is not equal to $t$. 
+(See Definition 2.5.3 in \cite{lloyd03logic-learning}.)
+If this kind of matching is desired, a syntactical variable must be used.
+\end{comment}
+
+\begin{comment}
+Algorithm \ref{alg:redex determination} does not take syntatical
+variables into account.
+Conceptually, given an equation with syntatical variables in it, we
+should first initialise the syntactical variables to obtain a valid
+statement.
+This will then allow us to use Algorithm \ref{alg:redex determination}
+to do pattern matching on it.
+In practice, we do the instantiation of syntactical
+variables and pattern matching at the same time.
+The following modified algorithm is used. 
+\begin{algorithm}\label{alg:redex determination w SVs}
+Given terms $h$ with syntactical variables in it and a candidate redex
+$t$, the algorithm decides whether there exists $\theta$ such that
+$h\theta$ is $\alpha$-equivalent to $t$.
+\begin{quote}
+ $\theta \leftarrow \{\}$ \\
+ while $(h\theta \neq t)$ do 
+ \begin{quote}
+  $o \leftarrow$ leftmost innermost occurrence in $t$ such that $o$ is
+  also in $h$ and $h\theta_{|o} \neq t_{|o}$; \\
+  if $h\theta_{|o}$ and $t_{|o}$ are both $\lambda$-terms then
+  \begin{quote}
+   change name of bound variable in $h\theta_{|o}$ to that in $t_{|o}$, 
+   renaming free variables in $h\theta_{|o}$ to avoid free-variable
+   capture whenever necessary;
+  \end{quote}
+  else if
+  $h\theta_{|o}$ is a free occurrence of a variable $x$ in $h$ and
+          no free variable in $t_{|o}$ would be captured by the
+          substitution $\{x/t_{|o}\}$ then
+  \begin{quote}
+   $\theta \leftarrow \theta \cup \{x/t_{|o}\}$;
+  \end{quote}
+  else if
+  $h\theta_{|o}$ is a syntactical variable $\bx$ in $h$
+  \begin{quote}
+   $\theta \leftarrow \theta \cup \{\bx/t_{|o}\}$;
+  \end{quote}
+  else return failure;
+ \end{quote}
+ return $\theta$;
+\end{quote}
+\end{algorithm}
+
+\noindent Provided syntactical variables only ever occur at places where a
+(normal) variable can appear, I think the algorithm is complete in the
+sense that if there is a way to instantiate the syntactical variables
+so that a matching can occur, Algorithm \ref{alg:redex determination w SVs} 
+will find it.
+\end{comment}
+
+\begin{comment}
+Algorithm \ref{alg:redex determination w SVs} renames variables
+as necessary when both $h\theta_{|o}$ and $t_{|o}$ are $\lambda$-terms.
+Renaming of free variables in $h$ is safe only because the head of a
+statement cannot contain more than one occurrence of a free variable. 
+\end{comment}
+
+\begin{comment}
+Typically, the $h$ considered in Algorithm \ref{alg:redex determination w SVs}
+is the head of a statement $h = b$.
+When we rename free variables in $h$, we also need to rename the
+corresponding variables in $b$ so as not to change the original
+meaning of the statement. 
+How about the bound variables?
+When we change a bound variable in $h$, do we need to rename its
+corresponding variables in $b$? 
+
+In the presence of syntactical variables, the answer is a definite yes.
+Consider the statement $(f\;\lambda x.\bu) = \lambda x.\bu$.
+Given candidate redex $(f\;\lambda y.(g\;y))$, we will get the
+incorrect answer $\lambda x.(g\;y)$ if we do not rename the $x$ in the
+body of the statement during pattern matching.
+Efficient algorithms for doing such renaming of variables are
+described in Comments \ref{com:collectSharedVars} and
+\ref{com:collectFreeVars}.
+\end{comment}
+
+\begin{comment}
+There is a simple way to realise Algorithm \ref{alg:redex determination w SVs}.
+Start with two pointers $p_t$ and $p_h$ pointing, respectively, at $t$ and $h$. 
+Denote by $[p_t]$ and $[p_h]$ the subterms of $t$ and $h$ pointed to
+by $p_t$ and $p_h$. 
+Move the pointers forward one step at a time to the next subterm in
+the left-to-right, outermost-to-innermost order.
+At each time step, if $[p_h] \neq [p_t]$ then:
+\begin{enumerate}\itemsep1mm\parskip0mm
+ \item if $[p_h]$ is a syntactical variable, add $\{[p_h]/ [p_t]\}$ to $\theta$;
+ \item else if $[p_h]$ is a variable free in $h$ and the free variable
+   capture condition does not occur, add $\{[p_h]/[p_t]\}$ to $\theta$;
+
+ \item else if $[p_t]$ and $[p_h]$ are both lambda terms and $x_t$ and
+   $x_h$ are the corresponding lambda variables, then set all occurrences
+   of $x_h$ in $[p_h]$ to $x_t$, renaming as necessary free variables
+   that get captured as a result;
+ \item else return failure.
+\end{enumerate} 
+\end{comment}
+
+<<pattern-match::function declarations>>=
+bool redex_match(term * head, term * body, vector<substitution> & theta);
+bool redex_match(term * head, term * body, vector<substitution> & theta, 
+		 vector<term *> bindingAbss, term * orig_head);
+@ %def redex_match
+
+<<pattern-match::functions>>=
+bool redex_match(term * head, term * body, vector<substitution> & theta) {
+        vector<term *> bindingAbss;
+        return redex_match(head, body, theta, bindingAbss, head);
+}
+@ %def redex_match
+
+<<pattern-match::functions>>=
+bool redex_match(term * head, term * body, vector<substitution> & theta, 
+		 vector<term *> bindingAbss, term * orig_head) {
+        kind head_tag = head->tag;
+        kind term_tag = body->tag;
+
+        if (head_tag == SV) { <<redex-match::case of SV>>  }
+        if (head_tag == V) { <<redex-match::case of V>> }
+        if (head_tag != term_tag) return false;
+
+        <<redex-match::case of constant>>
+        if (head_tag == APP) { <<redex-match::case of APP>> }
+        if (head_tag == PROD) { <<redex-match::case of PROD>> }
+        if (head_tag == ABS) { <<redex-match::case of ABS>> }
+        if (head_tag == MODAL) { <<redex-match::case of MODAL>> }
+        assert(false); return false;
+}
+@ %def redex_match
+
+\begin{comment}\label{com:redex matching sv}
+Here we consider matching on syntactical variables.
+A syntactical variable matches anything, if all the constraints are
+obeyed, that is.
+\end{comment}
+
+<<redex-match::case of SV>>=
+<<redex-match::case of SV::check constraints>>
+substitution sub(head->cname, body);
+theta.push_back(sub);
+return true;
+@ 
+
+\begin{comment}
+The constraint {\tt /VAR/} means that the term bound to the current
+syntactical variable must be a variable.
+The constraint {\tt /CONST/} means that the term bound to the current
+syntactical variable must be a data constructor or a function symbol.
+The constraint {\tt /EQUAL,x\_SV/}, where {\tt x\_SV} is another
+syntactical variable appearing before the current one, means that the
+term bound to the current syntactical variable must be equal to the
+term bound to {\tt x\_SV}.
+\end{comment}
+
+<<redex-match::case of SV::check constraints>>=
+condition * constraint = head->cond;
+if (constraint) {
+        int ctag = constraint->tag;
+
+        if (ctag == CVAR && term_tag != V) return false; // problematic?
+        else if (ctag == CCONST && term_tag != D && term_tag != F) return false;
+        else if (ctag == CEQUAL) {
+                // if (term_tag != D && term_tag != V) return false;
+                term * bound = findBinding(constraint->svname, theta);
+                <<error handling::get previously bound>>
+                if (body->equal(bound) == false) return false;
+        } else if (ctag == CNOTEQUAL) {
+                // if (term_tag != D) return false;
+                term * bound = findBinding(constraint->svname, theta);
+                <<error handling::get previously bound>>
+                if (body->equal(bound) == true) return false;
+        }
+        // assert(ctag != CVAR); assert(ctag != CNOTEQUAL);
+}
+@ 
+
+<<error handling::get previously bound>>=
+if (bound == NULL) {
+        setSelector(STDERR);
+        ioprint("The constraint EQUAL or NOTEQUAL on syntactical "
+                "variables is used incorrectly; it appears before "
+                "its argument is instantiated.\n");
+        assert(false);
+}
+@ 
+
+\begin{comment}
+We next examine the case of variables.
+We do not have to do anything if {\tt head} is identical to {\tt body}.
+If {\tt head} is a bound variable, then {\tt body} must be identical
+to {\tt head} for matching to succeed.
+\end{comment}
+
+<<redex-match::case of V>>=
+if (term_tag == V && head->cname == body->cname) return true;
+if (head->isFree() == false) return false;
+if (head->cname == iWildcard) return true;
+                
+<<redex-match::case of V::check free variable capture condition>>
+
+substitution sub(head->cname, body);
+theta.push_back(sub);
+return true;
+@ 
+
+\begin{comment}
+We need to check that no variable in {\tt body} would be captured by
+the substitution {\tt {head/body}}.
+\end{comment}
+
+<<redex-match::case of V::check free variable capture condition>>=
+int captd;
+if (body->captured(bindingAbss, captd)) {
+        setSelector(STDERR);
+        cerr <<" ** Matching Failed: Free variable capture in redex-match.\n"; 
+        ioprint("head = "); head->print(); ioprintln();
+        ioprint("term = "); body->print(); ioprintln();
+	assert(orig_head);
+	ioprint("orig head = "); orig_head->print(); ioprintln();
+        return false; }
+@ 
+
+\begin{comment}
+We now look at the case when {\tt head} is a constant.
+\end{comment}
+
+<<redex-match::case of constant>>=
+if (head_tag == F) return (head->cname == body->cname);
+if (head_tag == D) {
+	if (head->isfloat != body->isfloat) return false;
+	if (head->isint != body->isint) return false;
+	if (head->isfloat && body->isfloat) return (head->numf == body->numf);
+	else if (head->isint && body->isint) return (head->numi == body->numi);
+	return (head->cname == body->cname);
+}
+@ 
+
+\begin{comment}
+The case of applications is particularly simple.
+We first try to match the left child.
+If successful, we match the right child.
+\end{comment}
+
+<<redex-match::case of APP>>=
+if (!redex_match(head->lc(),body->lc(), theta, bindingAbss, orig_head)) 
+	return false;
+return redex_match(head->rc(), body->rc(),theta,bindingAbss,orig_head); 
+@ 
+
+\begin{comment}
+These can be used to debug {\tt redex\_match}.
+\end{comment}
+
+<<redex-match::case of APP::debug matching 1>>=
+if (verbose == 3) {
+    ioprint("\n\t\tmatching "); head->lc()->print(); 
+    ioprint(" and "); body->lc()->print(); ioprint(" ... ");
+}
+@ 
+
+<<redex-match::case of APP::debug matching 2>>=
+if (verbose == 3) {
+    ioprint(" successful\n");
+    ioprint("\t\tmatching "); head->rc()->print(); ioprint(" and ");
+    body->rc()->print(); ioprint(" ... ");
+}
+@ 
+
+\begin{comment}
+We now look at the case of products.
+We cannot assume that the dimensions of {\tt head} and {\tt body} are
+equal even when the type-checker says they have the same types. 
+Why?
+Well, sometimes we use a function name to represent data.
+\end{comment}
+
+<<redex-match::case of PROD>>=
+unint size = head->fieldsize;
+if (size != body->fieldsize) return false;
+
+for (unint i=0; i!=size; i++)
+	if (!redex_match(head->fields[i],body->fields[i],theta,
+			 bindingAbss,orig_head)) 
+                return false;
+return true;
+@ 
+
+\begin{comment}
+The last case is that of abstraction.
+We change the name of lambda variables to avoid having to worry about
+$\alpha$-equivalence later on.
+\end{comment}
+
+<<redex-match::case of ABS>>=
+if (head->fields[0]->tag == SV) { 
+      redex_match(head->fields[0],body->fields[0],theta,bindingAbss,orig_head);
+ } else { <<redex-match::case of ABS::change variable name>> }
+bindingAbss.push_back(head);
+return redex_match(head->fields[1],body->fields[1],theta,bindingAbss,orig_head);
+@ 
+
+\begin{comment}
+If necessary, we need to change the name of the bound variable in 
+{\tt head} so that it is the same as the bound variable in {\tt body}.
+In so doing, we may inadvertently capture a free variable inside {\tt head}. 
+(This is an extremely rare scenario. I have never seen it happen in any
+ non-simulated computation.)
+Another variable renaming is necessary in this case.\\
+
+\noindent Thanks to the preprocessing we did (see Comments 
+\ref{com:collectSharedVars} and \ref{com:collectFreeVars}), we need to
+set only the name of one variable in each case.
+\end{comment}
+
+<<redex-match::case of ABS::change variable name>>=
+int term_var = body->fields[0]->cname;
+if (head->fields[0]->cname != term_var) {
+        int size = head->preFVars.size();
+        for (int i=0; i!=size; i++) 
+	        if (term_var == head->preFVars[i]->cname) { 
+                        <<redex-match::write a small warning message>>
+			head->preFVars[i]->cname = newPVar();
+                }
+	head->fields[0]->cname = term_var;
+}
+@ 
+
+<<redex-match::write a small warning message>>=
+int osel = getSelector(); setSelector(STDOUT);
+ioprint(" ** Trouble. Variable "); head->preFVars[i]->print();
+ioprint(" captured after lambda variable renaming.\n");
+ioprint("head = "); head->print(); ioprintln();
+ioprint("term = "); body->print(); ioprintln();
+setSelector(osel);
+@ 
+
+<<redex-match::case of MODAL>>=
+if (head->modality != body->modality) return false;
+return redex_match(head->fields[0],body->fields[0],theta,bindingAbss,orig_head);
+@ 
+
+\begin{comment}
+We now look at some instructive test cases for the procedure.
+Evaluating the following program
+\begin{verbatim}
+    (f \y.x) = True
+    : (f \y.(g y y))
+\end{verbatim}
+will result in 
+\begin{verbatim}
+      ** Matching Error: Free variable capture in redex-match.
+    Final Answer: (f \y.((g y) y)).
+\end{verbatim}
+To force a matching here, we can use the statement
+\verb/(f \y.x_SV) = True/ instead.
+Evaluating the same query will then result in {\tt True}.\\
+
+\noindent Evaluating the program
+\begin{verbatim}
+    (f \x.(g x y)) = (g y y)
+    : (f \y.(g y y))
+\end{verbatim}
+will result in
+\begin{verbatim}
+     ** Trouble. Variable y captured after lambda variable renaming.
+     ** Matching Failed: Free variable capture in redex-match.
+    Final Answer: (f \y.((g y) y)).
+\end{verbatim}
+The lambda variable $x$ in the head of the statement is successfully
+renamed at first.
+Matching fails when we subsequently try to match the free variable $y$
+in the head of the statement with the bound variable $y$ in the query.
+The reader should convince herself that matching should indeed fail in
+this case.\\
+
+\noindent Evaluating this next prggram 
+\begin{verbatim}
+    (f \x.(g y x)) = (g y y)
+    : (f \y.(g z y))
+\end{verbatim}
+will produce the answer {\tt ((g z) z)}.
+\end{comment}
+
+\section{Interaction with the Theorem Prover}
+\subsection{Rank $k$ Computations}
+
+<<term::function definitions::unused>>=
+#ifndef ESCHER
+#include "tableaux.h"
+bool term::simplifyWithTP() {
+	return false; // disable this function to begin with
+	if (isVar() || isD() || isF()) return false; 
+	if (isAbs()) return fields[1]->simplifyWithTP(); 
+	if (isProd()) {
+		for (unint i=0; i!=fieldsize; i++)
+			if (fields[i]->simplifyWithTP()) return true;
+		return false;
+	}
+	/* if done previously, return */
+	if (isApp() && lc()->isApp() && lc()->lc()->isD(iTpTag))
+		return false;
+	/* we don't do terms with free variables inside */
+	getFreeVars();
+	if (frvarsize > 0) {
+		assert(isApp() || isModal());
+		if (isApp()) {
+			if (lc()->simplifyWithTP()) return true;
+			return rc()->simplifyWithTP(); 
+		} else if (isModal()) { assert(false); }
+	}
+	/* check that the type is Bool */
+	pair<type *, vector<term_type> > res = mywellTyped(this);
+	if (res.first->getTag() != "Bool") {
+		assert(isApp() || isModal());
+		if (isApp()) {
+			if (lc()->simplifyWithTP()) return true;
+			return rc()->simplifyWithTP(); 
+		} else if (isModal()) { assert(false); }
+	}
+	if (!(isApp() && lc()->isF(iTpHelp))) {
+		assert(isApp() || isModal());
+		if (isApp()) {
+			if (lc()->simplifyWithTP()) return true;
+			return rc()->simplifyWithTP(); 
+		} else if (isModal()) { assert(false); }
+	}
+	<<simplifyWithTP::call theorem prover>> 
+}
+
+bool term::simplifyWithTP2() {
+	<<simplifyWithTP::call theorem prover>>
+}
+#endif
+@ %def simplifyWithTP simplifyWithTP2 
+
+<<simplifyWithTP::call theorem prover>>=
+term * theorem = rc();
+vector<pair<term *,bool> > tlist;
+// insert goal formula into tableau 
+term * goal = new_term(APP);
+// goal->lc = new_term(F, iNot); goal->rc = theorem->clone();
+goal->insert(new_term(F, iNot)); goal->insert(theorem->clone());
+pair<term *,bool> gent(goal->normalise(), false);
+tlist.push_back(gent);
+
+// prove theorem 
+backchain = true;
+Tableaux tab(tlist);
+TruthValue ret = tab.expand();
+if (verbose) {
+	ioprint("Attempted Proof:\n "); tab.print();
+	ioprint("  Answer : "); ret.print(); ioprintln(" ;");
+}
+tab.freememory();
+if (ret.value == MYTRUE) {
+	lc()->freememory(); rc()->freememory(); fieldsize = 0;
+	tag = D; cname = iTrue;
+	return true;
+} else {
+	term * temp = new_term(APP); 
+	/* temp->lc = new_term(APP);
+	temp->rc = theorem->clone();
+	temp->lc->lc = new_term(D, iTpTag);
+	temp->lc->rc = new_term(D, iDontKnow); */
+	temp->insert(new_term(APP));
+	temp->insert(theorem->clone());
+	temp->lc()->insert(new_term(D, iTpTag)); 
+	temp->lc()->insert(new_term(D, iDontKnow)); 
+	replace(temp); 
+	temp->freememory();
+} 
+return false;
+@ 
+
+\subsection{Free Variable Instantiation}
+\begin{comment}
+In the theorem proving mode, we sometimes need to replace universally
+quantified variables with so-called free variables.
+These needs to be instantiated at some stage.
+One important mechanism used to instantiate them is to find matching
+between subformulas that would allow us to close off branches.
+The matching algorithm is very similar to {\tt redex\_match}, except
+that we concentrate only on free variables and do not do
+$\alpha$-conversion.
+\end{comment}
+
+<<pattern-match::function declarations>>=
+bool freevar_match(term * fml1, term * fml2, vector<substitution> & theta);
+bool freevar_match(term * fml1, term * fml2, vector<substitution> & theta, 
+		   vector<term *> bindingAbss);
+@
+
+<<pattern-match::functions>>=
+bool freevar_match(term * fml1, term * fml2,
+		   vector<substitution> & theta) {
+        vector<term *> bindingAbss;
+        return freevar_match(fml1, fml2, theta, bindingAbss);
+}
+@ %def freevar_match
+
+
+<<pattern-match::functions>>=
+bool freevar_match(term * head, term * body, vector<substitution> & theta, 
+		   vector<term *> bindingAbss) {
+        kind head_tag = head->tag;
+        kind term_tag = body->tag;
+	assert(head_tag != SV /*&& head_tag != MODAL*/);
+	if (head_tag == V) {
+		if (isUVar(head->cname) && !body->occursFree(head->cname))
+			{ term * orig_head = NULL; 
+			  head->validfree = true; head->free = true; 
+			  <<redex-match::case of V>> }
+	} 
+	if (term_tag == V) {
+		if (isUVar(body->cname) && !head->occursFree(body->cname))
+			{ term * headtemp = head;
+			  head = body;
+			  body = headtemp;
+			  term * orig_head = NULL;
+			  head->validfree = true; head->free = true; 
+			  <<redex-match::case of V>>
+			}
+	}
+	if (head_tag != term_tag) return false;
+	if (head_tag == V && term_tag == V) {
+		if (head->cname != body->cname) return false;
+		return true;
+	}
+
+	<<redex-match::case of constant>>
+	if (head_tag == APP) { <<freevar-match::case of APP>> }
+        if (head_tag == PROD) { <<freevar-match::case of PROD>> }
+        if (head_tag == ABS) { <<freevar-match::case of ABS>> }
+	if (head_tag == MODAL) { <<freevar-match::case of MODAL>> }
+        assert(false); return false;
+}
+@ 
+
+\begin{comment}
+One significant case where {\tt redex\_match} and {\tt freevar\_match}
+differs is in the case of abstractions.
+In {\tt redex\_match}, we will rename the name of bound variables in
+the {\tt head} if necessary. 
+(We are looking for a substitution that achieves $\alpha$-equivalence). 
+This is not done in {\tt freevar\_match}.
+We may or may not want to do this in the future.
+\end{comment}
+
+<<freevar-match::case of ABS>>=
+if (head->fields[0]->cname != body->fields[0]->cname) return false;
+bindingAbss.push_back(head);
+return freevar_match(head->fields[1], body->fields[1], theta, bindingAbss);
+@ 
+
+\begin{comment}
+These cases are identical for {\tt redex\_match} and {\tt freevar\_match}.
+\end{comment}
+
+<<freevar-match::case of APP>>=
+if (!freevar_match(head->lc(),body->lc(),theta,bindingAbss)) return false;
+return freevar_match(head->rc(), body->rc(), theta, bindingAbss); 
+@ 
+
+<<freevar-match::case of MODAL>>=
+if (head->modality != body->modality) return false;
+return freevar_match(head->fields[0], body->fields[0],theta, bindingAbss);
+@ 
+
+<<freevar-match::case of PROD>>=
+unint size = head->fieldsize;
+if (size != body->fieldsize) return false;
+
+for (unint i=0; i!=size; i++) {
+	setSelector(SILENT); 
+	ioprint("unifying "); head->fields[i]->print(); 
+	ioprint(" and "); body->fields[i]->print(); ioprint(" ");
+        if (!freevar_match(head->fields[i],body->fields[i],theta,bindingAbss)){ 
+		setSelector(SILENT); ioprint(" false\n"); setSelector(SILENT);
+                return false;
+	}
+	setSelector(SILENT); ioprint(" true\n"); setSelector(SILENT);
+}
+return true;
+@ 
+
+\subsubsection{Manipulating Substitutions}
+<<pattern-match::function declarations>>=
+void printTheta(vector<substitution> & theta);
+@ %def printTheta
+
+<<pattern-match::functions>>=
+void printTheta(vector<substitution> & theta) {
+        if (getSelector() == SILENT) return;
+        ioprint('{');
+        int size = theta.size();
+        if (size == 0) { ioprint("}\n"); return; }
+        for (int i=0; i!=size-1; i++) {
+                ioprint('('); 
+		if (theta[i].first >= 5000) { 
+			ioprint(pve); ioprint(theta[i].first-5000); }
+		else ioprint(getString(theta[i].first)); 
+		ioprint('/');
+                theta[i].second->print(); ioprint("), ");
+        }
+        ioprint('(');
+	if (theta[size-1].first >= 5000) { 
+		ioprint(pve); ioprint(theta[size-1].first-5000); }
+	else ioprint(getString(theta[size-1].first)); 
+	ioprint('/');
+        theta[size-1].second->print(); ioprint(')');
+        ioprint("}\n");
+}
+@ %def printTheta
+
+<<pattern-match::function declarations>>=
+term * findBinding(int svname, vector<substitution> & theta);
+@ %def findBinding
+
+<<pattern-match::functions>>=
+term * findBinding(int svname, vector<substitution> & theta) {
+        int size = theta.size();
+        for (int i=0; i!=size; i++)
+                if (theta[i].first == svname) return theta[i].second;
+        return NULL;
+}
+@ %def findBinding
+
+\subsubsection{File Organization}
+<<terms.h>>=
+#ifndef _TERM_H
+#define _TERM_H
+
+#include <iostream>
+#include <string>
+#include <vector>
+#include <set>
+#include <utility>
+#include <cassert>
+#include <stdlib.h>
+#include <ctype.h>
+#include <math.h>
+#include "io.h"
+using namespace std;
+
+#define unint unsigned int  // defined in stdlib.h
+
+struct term;
+class type;
+
+<<term::definitions>>
+<<term::supporting types>>
+typedef vector<int> occurrence;
+<<term::type defs>>
+
+extern const string & getString(int code);
+extern bool isUVar(term * t);
+extern bool isUVar(int cn);
+
+struct term {
+        <<term bool parts>>
+        <<term parts>>
+        term * next;
+	<<term vector parts>>
+        <<term::function declarations>>
+	term * clone();
+	void freememory();
+	void replace(term * t);
+	bool equal(term * t);
+	bool isFunc2Args();
+	bool isFunc2Args(int f);
+	term * spineTip();
+	term * spineTip(int & x);
+	bool isChar();
+	bool isString();
+	bool isAString();
+	bool isRigid();
+	void print();
+	void printVertical(unint level);
+        void getFreeVars();
+	void unmarkValidfree();
+	void labelStaticBoundVars();
+	void labelBound(int x);
+	bool occursFree(int var);
+	bool occursFreeNaive(int var);
+	bool occursFreeNaive(int var, vector<int> boundv);
+	bool captured(vector<term *> & bvars, int & captd);
+	void rename(int var1, int var2);
+	void renameLambdaVar(int var1, int var2);
+	void subst(vector<substitution> & subs);
+	void subst(substitution & sub);
+	void subst2(vector<substitution> & subs, vector<term *> bv,
+		    term ** pointer);
+	// bool containsQuantifiers();
+	bool isNegation();
+	bool isNegationOf(term * t2);
+	bool isDiamond();
+	void stripNegations();
+	bool containsFreeVariable();
+	void collectFreeVariables(set<int> & fvars);
+	term * normalise();
+	term * normalise1();
+	term * normalise2();
+	void collectFunctionNames(set<int> & x);
+	bool termReplace(term * s, term * r, 
+			 term * parent,int id);
+	bool matchReplace(term * s, term * r, 
+			  term * parent,int id);
+	bool simplifyEquality(term * parent, unint id);
+	bool simplifyArithmetic(term * parent, unint id);
+	bool simplifyInequalities(term * parent, unint id);
+	bool simplifyMath(term * parent, unint id);
+	bool betaReduction(term * parent, unint id);
+	bool simplifyIte(term * parent, unint id);
+	bool simplifyConjunction();
+	bool simplifyConjunction2(term * parent, unint id);
+	bool simplifyExistential(term * parent, unint id);
+	bool simplifyUniversal(term * parent, unint id);
+	bool simplifyModalTerms(term * parent, unint id);
+	term * findEq(term * root);
+	bool isEq(term * root);
+	bool isEq(int var);
+	term * replaceEq(int var);
+	void collectSharedVars();
+	void shareLambdaVars(vector<term *> & lvars, bool use);
+	void shareVar(term * var, term * parent, unint id);
+	void shareHeadLambdaVars(vector<term *> & hlvars);
+	void collectFreeVars(term * bodyparent, unint id);
+	void collectLambdaVars(multiset<int> & ret);
+	bool shareFreeVar(term * v, term * parent, unint id);
+	bool precomputeFreeVars();
+	// bool simplifyWithTP();
+	// bool simplifyWithTP2();
+};
+
+<<term::memory management>>
+extern int newPVar();
+extern int newUVar();
+extern term * newT2Args(kind k, const string & f);
+extern term * newT2Args(kind k, int f);
+
+#endif
+@ 
+
+<<terms.cc>>=
+#include "terms.h"
+<<terms.cc::local functions>>
+<<term::function definitions>>
+@ 
+
+<<pattern-match.h>>=
+#ifndef _PATTERN_MATCH_H
+#define _PATTERN_MATCH_H
+
+#include "terms.h"
+
+<<pattern-match::function declarations>>
+
+#endif
+@ 
+
+<<pattern-match.cc>>=
+#include <iostream>
+#include <utility>
+#include <vector>
+#include "io.h"
+#include "pattern-match.h"
+#include "global.h"
+
+<<pattern-match::functions>>
+@ 
+
+%%end

@@ -1,0 +1,731 @@
+% -*- mode: Noweb; noweb-code-mode: fundamental-mode; c-basic-offset: 8; -*-
+
+\chapter{System Modules}\label{chap:system modules}
+
+\section{The Booleans Module}
+<<booleans.es>>=
+-- Equality and Disequality
+
+remove : (a -> Bool) -> (a -> b) -> (a -> b) ;
+(remove s \x.d_SV/CONST/) = \x.d_SV ;
+     -- where d_SV is a default term (FIX THIS)
+
+(remove s \x.if u_SV then v else w_SV) =
+               \x.if (&& u_SV (not (s x))) then v else ((remove s \x.w_SV) x) ;
+
+-- = : a -> a -> Bool ;
+import sets.es ;
+
+(= \x.u_SV \y.v_SV) = 
+        (&& (less \x.u_SV \y.v_SV) (less \y.v_SV \x.u_SV)) ;
+
+less : (a -> b) -> (a -> b) -> Bool ;
+(less \x.d_SV/CONST/ z) = True ;
+     -- where d_SV is a default term (FIX THIS)
+(less \x.if u_SV then v else w_SV z) =
+             \forall x.(&& (implies u_SV (= v (z x))) 
+                           (less (remove \x.u_SV \x.w_SV) z)) ;
+
+
+ite : (Bool * a * a) -> a ;
+if True then u else v = u ;
+if False then u else v = v ;
+if x then x_SV else y_SV/EQUAL,x_SV/ = x_SV ;
+
+if if x then y else w then True else z = if x then y else (glueite w z) ;
+
+glueite : b -> a -> b ;
+(glueite False w) = w ;
+(glueite 0.0 w) = w ;
+(glueite if x then y else z w) = if x then y else (glueite z w) ; Eager ; 
+  -- this Eagerness is necessary to ensure correctness
+
+-- if (if u then True else False) then True else v = if u then True else v ;
+-- if u_SV then False else v_SV/EQUAL,u_SV/ = False ;
+-- if u_SV then True else (if v_SV/EQUAL,u_SV/ then True else w_SV = 
+--                   if v_SV then True else w_SV ;
+
+-- this something useful to convert if-then-else's to ||'s and &&'s
+-- if u then v else w = (|| (&& u v) (&& (not u) w)) ;
+
+-- (if x then y else z w) = if x then (y w) else (z w) ; LastResort ;
+-- \forall w.\forall x.\forall y.\forall z.(= (w if x then y else z) if x then (w y) else (w z)) ; LastResort ;
+
+&& : Bool -> Bool -> Bool ;
+(&& True x) = x ; 
+(&& x True) = x ;
+(&& False x) = False ;
+(&& x False) = False ;
+-- Do we really need these? Apparently permute need them.
+(&& (|| x y) z) = (|| (&& x z) (&& y z)) ; LastResort ;
+(&& x (|| y z)) = (|| (&& x y) (&& x z)) ; LastResort ;
+(&& if u then v else w t) = if (&& u t) then v else (&& w t) ; LastResort ;
+(&& t if u then v else w) = if (&& t u) then v else (&& t w) ; LastResort ;
+
+-- The following are specialized versions of the two rules above.
+-- In computations, I find that the two rules given above tend to work 
+-- (really) badly when used in conjunction with Escher's leftmost outermost 
+-- reduction order. A more in-depth analysis of this phenomenon is called for. 
+(&& if (= z u) then v else w t) = 
+                  if (&& (= z u) t) then v else (&& w t) ; LastResort ;
+(&& t if (= x u) then v else w) = 
+      	          if (&& t (= x u)) then v else (&& t w) ; LastResort ;
+
+|| : Bool -> Bool -> Bool ;
+(|| True x) = True ;
+(|| x True) = True ;
+(|| False x) = x ;
+(|| x False) = x ;
+
+(|| if u then True else w t) = if u then True else (|| w t) ; LastResort ;
+(|| if u then False else w t) = (|| (&& (not u) w) t) ; LastResort ;
+
+(|| t if u then True else w) = if u then True else (|| t w) ; LastResort ;
+(|| t if u then False else w) = (|| t (&& (not u) w)) ; LastResort ;
+
+-- this is needed when using rmdup2
+(|| (= x_SV u_SV) (= y_SV/EQUAL,x_SV/ v_SV/EQUAL,u_SV/)) = (= x_SV u_SV) ;
+
+not : Bool -> Bool ;
+(not False) = True ;
+(not True) = False ;
+(not (not x)) = x ;
+(not (&& x y)) = (|| (not x) (not y)) ; LastResort ;
+(not (|| x y)) = (&& (not x) (not y)) ; LastResort ;
+(not if u then v else w) = if u then (not v) else (not w) ; LastResort ;
+
+sigma : (a -> Bool) -> Bool ;
+<<existential statements>>
+
+pi : (a -> Bool) -> Bool ;
+<<universal statements>>
+
+implies : Bool -> Bool -> Bool ;
+(implies True x) = x ;    -- these are needed by queries 8 and 9 in 
+(implies False x) = True ; -- the database example
+-- (implies p q) = (|| (not p) q) ; LastResort ; -- this affects pi, bad.
+
+/= : a -> a -> Bool ;
+(/= x y) = (not (= x y)) ;
+
+comp : (a -> b) -> (b -> c) -> a -> c ;
+-- (comp p1 p2) = \x.(p2 (p1 x)) ;
+(comp p1 p2 x) = (p2 (p1 x)) ; 
+
+proj1 : (a * b) -> a ;
+(proj1 (t1,t2)) = t1 ;
+
+proj2 : (a * b) -> b ;
+(proj2 (t1,t2)) = t2 ;
+
+identity : a -> a ;
+(identity x) = x ; LastResort ;
+
+-- These are used by the theorem prover
+TpTag : ProveStatus -> Bool -> Bool ;
+DontKnow : ProveStatus ;
+
+@ 
+
+
+\begin{comment}\label{com:booleans:existential}
+The rules for $\Sigma$ as presented in \cite{lloyd03logic-learning}
+are as follows:
+\begin{gather}
+ \exists x_1.\cdots\exists x_n.\top = \top \label{seq:existential true}\\
+ \exists x_1.\cdots\exists x_n.\bot = \bot \label{seq:existential false}\\
+ \exists x_1.\cdots\exists x_n.({\bf x} \wedge (x_i = {\bf u})
+    \wedge {\bf y}) = 
+    \exists x_1.\cdots\exists x_{i-1}.\exists x_{i+1}.\cdots \exists x_n.
+    ({\bf x}\{x_i/{\bf u}\} \wedge {\bf y}\{x_i/{\bf u}\})\label{seq:existential ceeq}\\
+ \exists x_1.\cdots\exists x_n.({\bf u} \vee {\bf v}) =
+   (\exists x_1.\cdots\exists x_n.{\bf u}) \vee  
+   (\exists x_1.\cdots\exists x_n.{\bf v}) \label{seq:existential u or v}\\
+ \exists x_1.\cdots\exists x_n.(\mathit{if}\; {\bf u}\; \mathit{then} \; \top\;\mathit{else}\; {\bf v}) =
+   (\mathit{if}\; \exists x_1.\cdots\exists x_n.{\bf u}\;\mathit{then}\; \top\;
+    \mathit{else}\; \exists x_1.\cdots\exists x_n.{\bf v} \label{seq:existential ite true}\\
+  \exists x_1.\cdots\exists x_n.(\mathit{if}\; {\bf u}\;\mathit{then}\;\top\;\mathit{else}\; {\bf v}) =
+   \exists x_1.\cdots\exists x_n.(\neg {\bf u} \vee {\bf v})
+ \label{seq:existential ite false}
+\end{gather}
+Statements \ref{seq:existential true} to \ref{seq:existential ceeq}
+are implemented in the internal simplification routines.
+We now look at how the remaining statements are implemented in the
+booleans module.
+The expression $\exists x_1\cdots\exists x_n$ in the heads is a bit
+worrying. 
+How can we capture that in a finite number of statements?
+The answer is very simple: replace $\exists x_1\cdots\exists x_n$ with
+$\exists x$ in Statements \ref{seq:existential u or v} to
+\ref{seq:existential ite false}.
+Here are some questions for the reader.
+Why can we do that? What is the cost of doing that?
+Why do we bother with the case of $\exists x_1\cdots\exists x_3$ for
+Statements \ref{seq:existential u or v} and \ref{seq:existential ite true} 
+but not Statement \ref{seq:existential ite false}? 
+Is the number 3 special or can (should?) it be so some other number?
+\end{comment}
+
+<<existential statements>>=
+(sigma \x.(|| u_SV v_SV)) = (|| (sigma \x.u_SV) (sigma \x.v_SV)) ;
+(sigma \x1.(sigma \x2.(sigma \x3.(|| u_SV v_SV)) ) ) =
+        (|| (sigma \x1.(sigma \x2.(sigma \x3.u_SV))) 
+            (sigma \x1.(sigma \x2.(sigma \x3.v_SV)))) ;
+
+(sigma \x.if u_SV then True else v_SV) = 
+       	     	  if \exists x.u_SV then True else \exists x.v_SV ;
+(sigma \x1.(sigma \x2.(sigma \x3.if u_SV then True else v_SV))) = 
+       if (sigma \x1.(sigma \x2.(sigma \x3.u_SV))) then True 
+       else (sigma \x1.(sigma \x2.(sigma \x3.v_SV))) ;
+
+(sigma \x.if u_SV then False else v_SV) = (sigma \x.(|| (not u_SV) v_SV)) ;
+(sigma \x2.(sigma \x1.(sigma \x.if u_SV then False else v_SV))) = 
+       (sigma \x2.(sigma \x1.(sigma \x.(|| (not u_SV) v_SV)))) ;
+(sigma \x.if u_SV then v_SV else w_SV) = 
+       	     if (sigma \x.(&& u_SV v_SV)) then True
+       	     else (sigma \x.(&& (not u_SV) w_SV)) ; LastResort ;
+
+-- \exists x.if u_SV then v_SV else w_SV = 
+--  if \exists x.(&& u_SV v_SV) then True else \exists x.(&& (not u_SV) w_SV) ; 
+
+@ 
+
+\begin{comment}
+The rules for $\Pi$ as stated in \cite{lloyd03logic-learning} are as
+follows:
+\begin{gather}
+\label{seq:universal true}
+\forall x_1.\cdots\forall x_n.(\bot \rightarrow \bu) = \top \\
+\label{seq:universal ceeq}
+\forall x_1.\cdots\forall x_n.(\bx \wedge (x_i = \bu) \wedge \by
+\rightarrow \bv) = \notag \\
+\hspace{6em}\forall x_1.\cdots\forall x_{i-1}.\forall x_{i+1}.\cdots\forall x_n.
+((\bx \wedge \by \rightarrow \bv)\{x_i/\bu\})\\
+\label{seq:universal u or v}
+\forall x_1.\cdots\forall x_n.(\bu \vee \bv \rightarrow \bt) =
+(\forall x_1.\cdots\forall x_n.(\bu \rightarrow \bt)) \wedge
+            (\forall x_1.\cdots\forall x_n.(\bv \rightarrow \bt))\\
+\label{seq:universal ite true}
+\forall x_1.\cdots\forall x_n.((\mathit{ite}\; \bu \; \top \; \bv)
+\rightarrow \bt) = (\forall x_1.\cdots\forall x_n.(\bu \rightarrow \bt)) \wedge
+            (\forall x_1.\cdots\forall x_n.(\bv \rightarrow \bt))\\
+\label{seq:universal ite false}
+\forall x_1.\cdots\forall x_n.((\mathit{ite}\;\bu\;\bot\;\bv)
+\rightarrow \bt) = \forall x_1.\cdots\forall x_n.(\neg \bu \wedge \bv
+\rightarrow \bt)
+\end{gather}
+Statements \ref{seq:universal true} and \ref{seq:universal ceeq} are
+implemented as part of the internal simplification routine.
+Notice that the body of Statements \ref{seq:universal u or v} and
+\ref{seq:universal ite true} are identical.
+If we include the statement 
+\begin{equation}\label{seq:ite true} 
+\mathit{if}\;u\;\mathit{then}\;\top\;\mathit{else}\;v = u \vee v 
+\end{equation}
+as part of the $\mathit{ite}$ rules, then we can get Statement
+\ref{seq:universal ite true} from Statement \ref{seq:universal u or v}
+via Statement \ref{seq:ite true}.
+Proceeding in a similar fashion, we can use
+\begin{equation}\label{seq:ite false}
+\mathit{if}\;u\;\mathit{then}\;\bot\;\mathit{else}\;v = \neg u \wedge v \end{equation}
+to get rid of Statement \ref{seq:universal ite false} (and Statement
+\ref{seq:existential ite false}).
+One thing with Statements \ref{seq:ite true} and \ref{seq:ite false} 
+is that they force the $a$ in the type of $\mathit{ite}$ to be boolean.
+Can we do this simplification?
+If we want to retain the flexibility of handling sets represented both
+as nested $\mathit{ite}$s and disjunctions, the answer is
+unfortunately no.
+This is because Statement \ref{seq:ite true} will transform any set
+represented in $\mathit{ite}$ form into its corresponding disjunctive
+form. 
+This will, for example, affect the operation of $\mathit{less}$, which
+is only defined for sets represented in $\mathit{ite}$ form. \\
+
+\noindent So we cannot do that simplification.
+(We can probably still safely use Statement \ref{seq:ite false}, but
+we will not try.) 
+That means we have to find a way to represent Statements
+\ref{seq:universal u or v}--\ref{seq:universal ite false}. 
+The following rules together capture them finitely.
+\begin{gather}
+\forall x.(\bu \vee \bv \rightarrow \bt) = 
+ \forall x.(\bu \rightarrow \bt) \wedge \forall x.(\bv \rightarrow \bt)\\
+\forall x.((\mathit{if}\;\bu\;\mathit{then}\;\top\;\mathit{else}\;\bv) \rightarrow \bt) = 
+ \forall x.(\bu \rightarrow \bt) \wedge \forall x.(\bv \rightarrow \bt)\\
+\forall x.(\forall y.\bu \wedge \forall z.\bv) = 
+ \forall x.\forall y.\bu \wedge \forall x.\forall z.\bv \\
+\forall x.((\mathit{if}\;\bu\;\mathit{then}\;\bot\;\mathit{else}\;\bv) \rightarrow \bt) =
+ \forall x.(\neg \bu \wedge \bv \rightarrow \bt) 
+\end{gather}
+\end{comment}
+
+\begin{question}
+Why do not we need the following counterpart
+\[ \forall x_1.\cdots\forall x_n.(\top \rightarrow \bu) = 
+     \forall x_1.\cdots\forall x_n.\bu \]
+to Statement \ref{seq:universal true}?
+I did see the need to put in $\top \rightarrow u = u$ in the module
+for some queries to work. 
+\end{question}
+
+<<universal statements>>=
+(pi \x.False) = False ;
+(pi \x.True) = True ;
+(pi \x1.(implies (|| u_SV v_SV) t_SV)) =
+      (&& (pi \x1.(implies u_SV t_SV)) (pi \x1.(implies v_SV t_SV))) ;
+(pi \x1.(implies if u_SV then True else v_SV t_SV)) =
+      (&& (pi \x1.(implies u_SV t_SV)) (pi \x1.(implies v_SV t_SV))) ;
+
+(pi \x.(&& (pi \x1.u_SV) (pi \x2.v_SV))) = 
+      (&& (pi \x.(pi \x1.u_SV)) (pi \x.(pi \x2.v_SV))) ;
+
+(pi \x.(implies if u_SV then True else v_SV t_SV)) =
+      (pi \x.(implies (&& (not u_SV) v_SV) t_SV)) ;
+
+-- if u then True else v = (|| u v)
+-- if u then False else v = (&& (not u) v)
+@ 
+
+\section{The Numbers Module}\label{sec:numbers module}
+
+<<numbers.es>>=
+Infinity : a ;
+NegInfinity : a ;
+
+(add x_SV/CONST/ Infinity) = Infinity ;
+(add Infinity x_SV/CONST/) = Infinity ;
+(sub x_SV/CONST/ Infinity) = NegInfinity ;
+(sub Infinity x_SV/CONST/) = Infinity ;
+
+(min x_SV/CONST/ Infinity) = x_SV ;
+(min Infinity x_SV/CONST/) = x_SV ;
+
+(add x 0.0) = x;
+(add 0.0 x) = x ;
+(mul x 0.0) = 0.0 ;
+(mul 0.0 x) = 0.0 ;
+
+(div 0 x) = 0 ;
+(div 0.0 x) = 0.0 ;
+(mul 1 x) = x ;
+(mul 1.0 x) = x ;
+
+Power : (number1 * Int) -> number2 ;
+power : (number1 * Int) -> number3 ;
+(power (1,n)) = 1;
+(power (m_SV/CONST/,0)) = 1 ;
+(power (m_SV/CONST/,1)) = m_SV ;
+(power (m_SV/CONST/,n_SV/CONST/)) = if (&& (<= m_SV 16) (< n_SV 16)) then
+                                        (power2 (m_SV,n_SV)) 
+                                    else (Power (m_SV,n_SV)) ;
+
+power2 : (number1 * Int) -> number2 ;
+(power2 (m_SV/CONST/,n_SV/CONST/)) = (mul m_SV (power (m_SV,(sub n_SV 1)))) ;
+
+integer : number1 -> number2 -> number3 ;
+(integer x y) = (sub (div x y) (remainder x y)) ;
+
+remainder : number1 -> number2 -> number3 ;
+(remainder x y) = (div (mod x y) y) ;
+
+monus : number1 -> number2 -> number3 ;
+(monus x_SV/CONST/ y_SV/CONST/) = (max 0 (sub x_SV y_SV)) ;
+
+-- this produces a loop
+-- (> (add u_SV/CONST/ (card v)) v_SV/CONST/) =
+--    	if (> u_SV v_SV) then True else (> (add u_SV (card v)) v_SV) ;
+
+-- > : number -> number -> Bool ;
+-- (> if u then v_SV/CONST/ else w_SV/CONST/ x_SV/CONST/) = 
+--                       if u then (> v_SV x_SV) else (> w_SV x_SV) ;
+
+-- >= : number -> number -> Bool ;
+-- (>= if u then v_SV/CONST/ else w_SV/CONST/ x_SV/CONST/) = 
+--                        if u then (>= v_SV x_SV) else (>= w_SV x_SV) ;
+
+-- < : number -> number -> Bool ;
+-- (< if u then v_SV/CONST/ else w_SV/CONST/ x_SV/CONST/) = 
+--                        if u then (< v_SV x_SV) else (< w_SV x_SV) ;
+
+-- <= : number -> number -> Bool ;
+-- (<= if u then v_SV/CONST/ else w_SV/CONST/ x_SV/CONST/) = 
+--                        if u then (<= v_SV x_SV) else (<= w_SV x_SV) ;
+
+-- (< x_SV/CONST/ Infinity) = 
+--    	       if (/= x_SV Infinity) then True else (< x_SV Infinity) ;
+
+(< Infinity x_SV/CONST/) = False ;
+(< x_SV/CONST/ Infinity) = True ;
+
+abs : number -> number ;
+(abs x_SV/CONST/) = if (>= x_SV 0) then x_SV else (add x_SV (mul -2 x_SV)) ;
+
+fabs : number -> number ;
+(fabs x_SV/CONST/) = if (>= x_SV 0.0) then x_SV else (add x_SV (mul -2.0 x_SV));
+
+mChooseN : Int -> Int -> Int ;
+(mChooseN m_SV/CONST/ 0) = 1 ;
+(mChooseN m_SV/CONST/ n_SV/CONST/) = 
+                      (div (facl m_SV (sub m_SV n_SV)) (fac n_SV)) ; 
+
+facl : Int -> Int -> Int ;
+(facl m_SV/CONST/ n_SV/CONST/) = if (> m_SV n_SV)
+                                 then (mul m_SV (facl (sub m_SV 1) n_SV))
+                                 else 1 ;
+
+fac : Int -> Int ;
+(fac 0) = 1 ;
+(fac 1) = 1 ;
+(fac m_SV/CONST/) = (mul m_SV (fac (sub m_SV 1))) ;
+@ 
+
+\section{The List Module}\label{sec:list module}
+
+<<lists.es>>=
+-- [] : (List a) ;
+-- # : a -> (List a) -> (List a) ;
+
+import numbers.es ;
+
+head : (List a) -> a ;
+(head (# x y)) = x ;
+
+tail : (List a) -> (List a) ;
+(tail (# x y)) = y ;
+
+last : (List a) -> a ;
+(last (# x [])) = x;
+(last (# x (# y z))) = (last (# y z)) ;
+
+elem : Int -> (List a) -> a ;
+(elem 1 (# x y)) = x ;
+(elem z_SV/CONST/ (# x y)) = (elem (sub z_SV 1) y) ;
+
+enumList : Int -> (List Int) ;
+(enumList x_SV/CONST/) = (enumList2 x_SV x_SV) ;
+
+enumList2 : Int -> Int -> (List Int) ;
+(enumList2 0 x) = [] ;
+(enumList2 x_SV/CONST/ y_SV/CONST/) = 
+          (# (add (sub y_SV x_SV) 1) (enumList2 (sub x_SV 1) y_SV)) ;
+
+inList : a -> (List a) -> Bool ;
+(inList x []) = False ;
+(inList x (# y z)) = if (= x y) then True else (inList x z) ;
+
+length : (List a) -> Int ;
+(length []) = 0 ;
+(length (# x y)) = (add 1 (length y)) ;
+
+zip : (List a) -> (List b) -> (List (a * b)) ;
+(zip [] []) = [] ;
+(zip (# x1 y1) (# x2 y2)) = (# (x1,x2) (zip y1 y2)) ;
+
+zipWith : a -> (List b) -> (List (a * b)) ;
+(zipWith x []) = [] ;
+(zipWith x (# y z)) = (# (x,y) (zipWith x z)) ;
+
+concat : ((List a) * (List a)) -> (List a) ;
+(concat ([],x)) = x ;
+(concat ((# u x), y)) = (# u (concat (x, y))) ;
+
+concat2 : (List a) -> (List a) -> (List a) ;
+(concat2 [] x) = x ;
+(concat2 (# u x) y) = (# u (concat2 x y)) ;
+
+reverse : (List a) -> (List a) ;
+(reverse []) = [] ;
+(reverse (# x y)) = (concat ((reverse y),[x])) ;
+
+append : ((List a) * (List a) * (List a)) -> Bool ;
+(append (u,v,w)) = 
+     (|| (&& (= u []) (= v w))
+         (sigma \r.
+          (sigma \x.
+           (sigma \y.(&& (&& (= u (# r x)) (= w (# r y))) 
+                         (append (x,v,y))))))) ;
+
+permute : ((List a) * (List a)) -> Bool ;
+(permute ([], x)) = (= x []) ;
+(permute ((# x y), w)) =
+    (sigma \u.(sigma \v.(sigma \z.
+       (&& (= w (# u v)) (&& (delete (u,(# x y),z)) (permute (z,v))))))) ;
+
+delete : (a * (List a) * (List a)) -> Bool ;             
+(delete (x,[],y)) = False ;
+(delete (x,(# y z),w)) = 
+    (|| (&& (= x y) (= w z))
+         (sigma \v.(&& (= w (# y v)) (delete (x,z,v))))) ;
+
+sorted : (List a) -> Bool ;
+(sorted []) = True ;
+(sorted (# x y)) = 
+   if (= y []) then True
+   else (sigma \u.(sigma \v.(&& (&& (= y (# u v)) (<= x u)) (sorted y)))) ;
+
+isort : (List a) -> (List a) ;
+(isort []) = [] ;
+(isort (# x y)) = (ins x (isort y)) ;
+
+ins : a -> (List a) -> (List a) ;
+(ins x []) = (# x []) ;
+(ins x (# y z)) = if (<= x y) then (# x (# y z)) else (# y (ins x z)) ;
+
+isort2 : (a -> a -> Bool) -> (List a) -> (List a) ;
+(isort2 p []) = [] ;
+(isort2 p (# x y)) = (ins2 p x (isort2 p y)) ;
+
+ins2 : (a -> a -> Bool) -> a -> (List a) -> (List a) ;
+(ins2 p x []) = (# x []) ;
+(ins2 p x (# y z)) = if (p x y) then (# x (# y z)) else (# y (ins2 p x z)) ;
+
+fold : (a -> b -> b) -> b -> (List a) -> b ;
+(fold m v []) = v ;
+(fold m v (# x y)) = (m x (fold m v y)) ;
+
+foldr : (a -> b -> b) -> b -> (List a) -> b;
+(foldr m s []) = s ;
+(foldr m s (# x y)) = (m x (foldr m s y)) ;
+
+filter : (a -> Bool) -> (List a) -> (List a) ;
+(filter p []) = [] ;
+(filter p (# x y)) = if (p x) then (# x (filter p y)) else (filter p y) ;
+
+map : (a -> b) -> (List a) -> (List b) ;
+(map m []) = [] ;
+(map m (# x [])) = (# (m x) []) ;
+(map m (# x y)) = (# (m x) (map m y)) ;
+
+rmduplicates : (List a) -> (List a) ;
+(rmduplicates []) = [] ;
+(rmduplicates (# x y)) = (# x (rmduplicates (removeListEle x y))) ;
+
+removeListEle : a -> (List a) -> (List a) ;
+(removeListEle x []) = [] ;
+(removeListEle x (# y z)) = if (= x y) then (removeListEle x z) 
+	       	      	    else (# y (removeListEle x z)) ;
+
+neg : (a -> Bool) -> a -> Bool ;
+(neg p x) = (not (p x)) ;
+
+qsort : (List a) -> (List a) ;
+(qsort []) = [] ;
+(qsort (# x y)) = 
+  (concat ((qsort (filter (neg (< x)) y)),
+           (# x (qsort (filter (< x) y))))) ;
+
+listExists : (a -> Bool) -> (List a) -> Bool ;
+(listExists p []) = False ;
+(listExists p (# x y)) = if (p x) then True else (listExists p y) ;
+
+sublist : Int -> (List a) -> (List a) ;
+(sublist n []) = [] ;
+(sublist n (# x y)) = if (> n 0) then (# x (sublist (sub n 1) y)) else [] ; 
+
+isSublist : (List a) -> (List a) -> Bool;
+(isSublist [] x) = True ;
+(isSublist (# x y) []) = False ;
+(isSublist (# x1 y1) (# x2 y2)) = 
+	      if (= x1 x2) then (isSublist y1 y2) else False ;
+
+ints : Int -> Int -> (List Int) ;
+(ints x y) = if (< x y) then (# x (ints (add x 1) y)) else (# x []) ;
+@
+
+<<sets.es>>=
+import numbers.es ;
+
+union : (a -> Bool) -> (a -> Bool) -> (a -> Bool) ;
+(union s t) = \x.(|| (s x) (t x)) ;
+
+intersect : (a -> Bool) -> (a -> Bool) -> (a -> Bool) ;
+(intersect s t) = \x.(&& (s x) (t x)) ;
+
+minus : (a -> Bool) -> (a -> Bool) -> (a -> Bool) ;
+(minus s t) = \x.(&& (s x) (= (t x) False)) ;
+
+subset : (a -> Bool) -> (a -> Bool) -> Bool ;
+(subset s t) = (pi \x.(implies (s x) (t x))) ;
+
+powerset : (a -> Bool) -> ((a -> Bool) -> Bool) ;
+(powerset \x.False)  = \s.(= s \x.False) ;
+(powerset \x.if u_SV then True else v_SV) =
+           \s.(sigma \t.(sigma \r.(&& ((powerset \x.u_SV) t)
+                    (&& ((powerset \x.v_SV) r) ((= s) (union t r)))))) ;
+(powerset \x.if u_SV then False else v_SV) = (powerset \x.(&& (not u_SV) v_SV)) ;
+(powerset \x.(= x t)) = \s.(|| (= s \y.False) (= s \x.(= x t))) ;
+(powerset \x.(|| u_SV v_SV)) =
+           \s.(sigma \t.(sigma \r.(&& ((powerset \x.u_SV) t)
+                    (&& ((powerset \x.v_SV) r) (= s (union t r)))))) ;
+
+linearise : (a -> Bool) -> (a -> Bool) ;
+(linearise \x.False) = \x.False ;
+(linearise \x.if u_SV then True else v_SV) =  
+          (union (linearise \x.u_SV) (linearise \x.v_SV)) ;
+(linearise \x.if u_SV then False else v_SV) =
+          (linearise \x.(&& (not u_SV) v_SV)) ;
+(linearise \x.(= x t)) = \x.if (= x t) then True else False ;
+(linearise \x.(|| u_SV v_SV)) = (union (linearise \x.u_SV) (linearise \x.v_SV)) ;
+
+rmdup : (a -> Bool) -> (a -> Bool) ;
+(rmdup \x.t_SV) = \x.(rmdup2 t_SV) ;
+
+rmdup2 : Bool -> Bool ;
+(rmdup2 False) = False ;
+(rmdup2 True) = True ;
+(rmdup2 (= x t_SV)) = (= x t_SV) ;
+(rmdup2 if (= x t_SV) then True else False) = 
+	       	 if (= x t_SV) then True else False ;
+(rmdup2 if (= x t_SV) then True else u) =
+	if (= x t_SV) then True else (rmdup2 (&& (/= x t_SV) u)) ; Eager ;
+(rmdup2 (|| (= x t_SV) u)) = (|| (= x t_SV) (rmdup2 (&& (/= x t_SV) u))) ;
+(rmdup2 (|| (|| (= x t_SV) u) v)) = (rmdup2 (|| (= x t_SV) (|| u v))) ;
+
+rmdupCustom : (a -> a -> Bool) -> (a -> Bool) -> (a -> Bool) ;
+(rmdupCustom p \x.t_SV) = \x.(rmdupCustom2 p t_SV) ;
+
+rmdupCustom2 : (a -> a -> Bool) -> Bool -> Bool ;
+(rmdupCustom2 p False) = False ;
+(rmdupCustom2 p if (= x t_SV) then True else False) = 
+	      	       if (= x t_SV) then True else False ;
+(rmdupCustom2 p if (= x t_SV) then True else u) =
+ if (= x t_SV) then True else (rmdupCustom2 p (&& (not (p x t_SV)) u)) ; Eager;
+
+card : (a -> Bool) -> Int ;
+(card s) = (card2 (rmdup s)) ;
+
+card2 : (a -> Bool) -> Int ;
+(card2 \x.(= x u)) = 1 ;
+(card2 \x.(= u x)) = 1 ;
+(card2 \x.(|| (= x u) v_SV)) = (add 1 (card2 \x.v_SV)) ;
+(card2 \x.(|| (= u x) v_SV)) = (add 1 (card2 \x.v_SV)) ;
+(card2 \x.(|| u_SV v_SV)) = (add (card2 \x.u_SV) (card2 \x.v_SV)) ;
+(card2 \x.False) = 0 ;
+(card2 \x.if (= x u_SV) then True else v_SV) = (add 1 (card2 \x.v_SV)) ;
+(card2 \x.if (&& (<= u_SV/CONST/ x) (<= x v_SV/CONST/)) then True else t_SV) =
+       (add (sub v_SV u_SV) (card2 \x.t_SV)) ;
+(card2 \x.if (>= x u_SV/CONST/) then True else t_SV) = Infinity ;
+(card2 \x.if (<= x u_SV/CONST/) then True else t_SV) = Infinity ;
+
+(card2 \x.if x_SV then True else v_SV) = (add (card2 \x.x_SV) (card2 \x.v_SV)) ;
+
+-- typeof(x) - which x? may need to use occurrence.
+-- (card2 \x.(&& (= (proj1 x) u_SV/CONST/)
+--     	     (= (proj2 x) v_SV/CONST/))) = 1 ; typeof(19) ~ (a * b) -> Bool;
+
+mapFn : (a -> b) -> (a -> Bool) -> (b -> Bool) ;
+(mapFn t s) = \x.\exists y.(&& (s y) (= (t y) x)) ;
+
+filterSet : (a -> Bool) -> (a -> Bool) -> (a -> Bool) ;
+(filterSet p \x.False) = \x.False ;
+(filterSet p \x.(= x v)) = if (p v) then \x.(= x v) else \x.False ;
+(filterSet p \x.(|| u_SV v_SV)) = (union (filterSet p \x.u_SV)
+	     	    	 	  	 (filterSet p \x.v_SV)) ;
+(filterSet p \x.if (= x v) then True else v_SV) =
+	   if (p v) then (union \x.(= x v) (filterSet p \x.v_SV))
+	   else (filterSet p \x.v_SV) ;
+
+pickAnElement : (a -> Bool) -> a ;
+(pickAnElement \x.(= x u)) = u ;
+(pickAnElement \x.if (= x u) then True else v_SV) = u ;
+
+switch : Int -> Bool -> Bool -> Bool -> Bool ;
+(switch 1 t1 t2 t3) = t1 ;
+(switch 2 t1 t2 t3) = t2 ;
+(switch 3 t1 t2 t3) = t3 ;
+
+compare : a -> a -> Int ;
+(compare x y) = if (= x y) then 1 else if (< x y) then 2 else 3 ;
+
+makeBTree : (a -> Bool) -> (a -> Bool) ;
+-- we expect the first argument to be in list form
+(makeBTree \x.s_SV) = \x.(makeBTree2 (sortIte s_SV)) ;
+
+makeBTree2 : Bool -> Bool ;
+(makeBTree2 False) = False ;
+(makeBTree2 if (= x y) then True else False) = (= x y) ;
+(makeBTree2 if (= x y) then True else v2) = 
+	 (switch (compare x (midEle if (= x y) then True else v2)) True
+	         (makeBTree2 (lessthan (midEle if (= x y) then True else v2)
+		       		   	 if (= x y) then True else v2))
+		 (makeBTree2 (greaterthan (midEle if (= x y) then True else v2)
+		       		   	  if (= x y) then True else v2))) ;
+
+sortIte : Bool -> Bool ;
+(sortIte False) = False ;
+(sortIte if (= x y) then True else v) = (insIte (= x y) (sortIte v)) ;
+
+insIte : Bool -> Bool -> Bool ;
+(insIte (= x y) False) = if (= x y) then True else False ;
+(insIte (= x_SV y) if (= z_SV/EQUAL,x_SV/ y2) then True else v) =
+	 if (< y y2) 
+         then if (= x_SV y) then True else if (= z_SV y2) then True else v
+	 else if (= z_SV y2) then True else (insIte (= x_SV y) v) ;
+
+cardBool : Bool -> Int ;
+(cardBool False) = 0 ;
+(cardBool if (= x y) then True else v) = (add 1 (cardBool v)) ;
+
+get : Float -> Bool -> Bool ;
+(get 1.0 if (= x y) then True else v) = y ;
+(get n_SV/CONST/ if (= x y) then True else z) = (get (sub n_SV 1.0) z) ;
+
+midEle : Bool -> a ;
+(midEle s) = (get (integer (cardBool s) 2) s) ;
+
+lessthan : a -> Bool -> Bool ;
+(lessthan z False) = False ;
+(lessthan z if (= x y) then True else v2) = 
+	    	   if (< y z) then if (= x y) then True else (lessthan z v2)
+		   else (lessthan z v2) ;
+
+greaterthan : a -> Bool -> Bool ;
+(greaterthan z False) = False ;
+(greaterthan z if (= x y) then True else v2) = 
+	     	  if (> y z) then if (= x y) then True else (greaterthan z v2)
+		  else (greaterthan z v2) ;
+
+removeBound : (a -> Bool) -> Bool ;
+(removeBound \x.x_SV) = x_SV ;
+
+simplify2D : ((a * a) -> Bool) -> ((a * a) -> Bool) ;
+(simplify2D \x.(&& (= (proj1 x) v1) (= (proj2 x) v2))) = \x.(= x (v1,v2)) ;
+(simplify2D \x.(|| u_SV v_SV)) = (union (simplify2D \x.u_SV) 
+	    	   	       	 	(simplify2D \x.v_SV)) ;
+
+<<multiset functions>>
+@
+
+<<multiset functions>>=
+msetunion : (a -> Int) -> (a -> Int) -> (a -> Int) ;
+(msetunion \x.0 m) = m ;
+(msetunion \x.if (= x t) then v else w_SV m) =
+     \x.if (= x t) then (add v (m t)) 
+        else ((msetunion \x.w_SV (remove \x.(= x t) m)) x) ;
+
+msetdiff : (a -> Int) -> (a -> Int) -> (a -> Int) ;
+(msetdiff \x.0 m) = \x.0 ;
+(msetdiff \x.if (= x t) then v else w_SV m) =
+     \x.if (= x t) then (monus v (m t)) else ((msetdiff \x.w_SV m) x) ;
+
+msetmax : (a -> Int) -> (a -> Int) -> (a -> Int) ;
+(msetmax \x.0 m) = m ;
+(msetmax \x.if (= x t) then v else w_SV m) =
+     \x.if (= x t) then (max v (m t)) 
+        else ((msetmax \x.w_SV (remove \x.(= x t) m)) x) ;
+
+msetmin : (a -> Int) -> (a -> Int) -> (a -> Int) ;
+(msetmin \x.0 m) = \x.0 ;
+(msetmin \x.if (= x t) then v else w_SV m) =
+     \x.if (= x t) then (min v (m t)) else ((msetmin \x.w_SV m) x) ;
+
+msetinc : (a -> Int) -> (a -> Int) -> Bool ;
+(msetinc \x.0 m) = True ;
+(msetinc \x.if u_SV then v else w_SV m) =
+     (&& (pi \x.(implies u_SV (<= v (m x))))
+          (msetinc (remove \x.u_SV \x.w_SV) m)) ;
+
+msetmember : a -> (a -> Int) -> Bool ;
+(msetmember x m) = (< 0 (m x)) ;
+@

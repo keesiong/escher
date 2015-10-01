@@ -1,0 +1,741 @@
+% -*- mode: Noweb; noweb-code-mode: c++-mode; c-basic-offset: 8; -*-
+\subsection{Computing and Reducing Candidate Redexes}
+
+\begin{comment}
+We now describe the function {\tt reduce} that dynamically computes
+the candidate redexes inside a term (in the leftmost outermost order)
+and tries to reduce them.
+\end{comment}
+
+\begin{definition}
+A {\em redex} of a term $t$ is an occurrence of a subterm of $t$ that
+is $\alpha$-equivalent to an instance of the head of a statement.
+\end{definition}
+
+\begin{comment}\label{com:subterm}
+Informally, given a term $t$, every term $s$ represented by a subtree
+of the syntax tree representing $t$, with the exception of the variable
+directly following a $\lambda$, is a subterm of $t$.
+The path expression leading from the root of the syntax tree
+representing $t$ to the root of the syntax tree representing $s$ is
+called the occurrence of $s$. 
+For exact formal definitions of these concepts, see
+\cite[pp. 46]{lloyd03logic-learning}. 
+\end{comment}
+
+\begin{comment}
+There is an easy way to count the number of subterms in a term $t$.
+A token is either a left bracket '(', a variable, a constant, or an
+expression of the form $\lambda x$ for some variable $x$.
+The number of subterms in a term $t$ is simply the number of tokens in
+(the string representation) of $t$.
+For example, the term $((f\;(1,(2,3),4)) \; \lambda x.(g\;x))$ has 13 subterms.
+\end{comment}
+
+\begin{comment}
+There are obviously many subterms.
+For redex testing, it is important that we rule out as many of these
+as posible up front.
+The following result is a start.
+
+\begin{proposition}\label{prop:not a redex}
+Let $t$ be a term.
+A subterm $r$ of $t$ cannot be a redex if any one of the following is true:
+\begin{enumerate}\itemsep1mm\parskip0mm
+ \item $r$ is a variable;
+ \item $r = \lambda x.t$ for some variable $x$ and term $t$;
+ \item $r = D\;t_1 \ldots t_n$, $n \geq 0$, where $D$ is a data
+   constructor of arity $m \geq n$, and each $t_i$ is a term;
+ \item $r = (t_1,\ldots,t_n)$ for some $n \geq 0$.
+\end{enumerate}
+\end{proposition}
+\begin{proof}
+Consider any statement $h = b$ in the program. 
+By definition, $h$ has the form $f\;t_1\ldots t_n$, $n \geq 0$ for
+some function $f$.
+In each of the cases above, $r \neq h\theta$ for any
+$\theta$ and therefore $r$ cannot be a redex.
+\end{proof}
+\end{comment}
+
+<<cannot possibly be a redex>>=
+if (isAString()) return false;
+if (tag == V || tag == D) return false;
+if (tag == ABS || tag == PROD || tag == MODAL || isData()) goto not_a_redex;
+@ 
+
+\begin{comment}\label{com:isData}
+This function checks whether the current term has the form
+$D\;t_1\ldots t_n$, $n \geq 1$, where $D$ is a data constructor of
+arity $m \geq n$ and each $t_i$ is a term.
+\end{comment}
+
+<<term::function declarations>>=
+bool isData();
+@ %def isData
+
+\begin{comment}
+When we see a term $t = D\;t_1\ldots t_n$, $n\geq 1$, where $D$ is a data
+constructor of arity $n$ and each $t_i$ is a term, we can immediately
+deduce that any prefix of $t$ cannot be a redex.
+The variable {\tt is\_data} is used to store this information.
+\end{comment}
+
+<<term bool parts>>=
+bool is_data;
+@ 
+
+<<term init>>=
+is_data = false;
+@ 
+
+<<heap term init>>=
+ret->is_data = false;
+@ 
+
+<<term clone parts>>=
+ret->is_data = is_data;
+@ 
+
+\begin{comment}
+We can probably sometimes recycle {\tt t->is\_data} here, but
+decided to always use the safe {\tt false} value instead.
+\end{comment}
+
+<<term replace parts>>=
+is_data = false;
+@ 
+
+\begin{comment}
+If the current term is a data term, then the left subterm of the
+current term is also a data term.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::isData() {
+        if (tag != APP) return false;
+        if (is_data) { fields[0]->is_data = true; return true; }
+        if (spineTip()->isD()) {
+                is_data = true; fields[0]->is_data = true; return true; }
+        return false;
+}
+@ %def isData
+
+\begin{comment}
+Proposition \ref{prop:not a redex} allows us to focus on terms of the
+form $(f\;t_1\ldots t_n)$, $n \geq 0$, in finding redexes.
+What else do we know that can be used to rule out as potential redexes
+subterms of this form?\\
+
+\noindent Given a function symbol $f$, we define the effective
+arity\index{effective arity} of $f$ to be the number of argument(s)
+$f$ is applied to in the head of any statement in the program.
+Clearly, given a term $t = (f\;t_1\ldots t_n)$, $n \geq 0$, if
+$n$ is not equal to the effective arity of $f$, then $t$ cannot
+possibly be a redex.
+\end{comment}
+
+<<cannot possibly be a redex 2>>=
+if (tag == F && getFuncEArity(cname).first != 0) return false; 
+if (isFuncNotRightArgs()) goto not_a_redex;
+@ 
+
+\begin{comment}
+This function checks whether the current term, which is an
+application node, is a function applied to the right number of
+arguments (its effective arity). 
+The number of arguments can be more than the effective arity of the 
+leftmost function symbol.
+The term $(((\mathit{remove}\; s)\;t)\;x)$ is one such example.
+\end{comment}
+
+<<term::function declarations>>=
+bool isFuncNotRightArgs();
+@ %def isFuncNotRightArgs
+
+\begin{comment}
+This is used to capture the fact that every prefix of a function
+application term that does not have enough arguments will not have
+enough arguments.
+\end{comment}
+
+<<term bool parts>>=
+bool notEnoughArgs;
+@ 
+
+<<term init>>=
+notEnoughArgs = false;
+@ 
+
+<<heap term init>>=
+ret->notEnoughArgs = false;
+@ 
+
+<<term clone parts>>=
+ret->notEnoughArgs = notEnoughArgs;
+@ 
+
+\begin{comment}
+We can probably safely recycle {\tt t->notEnoughArgs} here.
+\end{comment}
+
+<<term replace parts>>=
+notEnoughArgs = false;
+@ 
+
+\begin{comment}
+If we have an excess of arguments, return true.
+Otherwise, if we have an under supply of arguments, mark the 
+{\tt notEnoughArgs} flag of the left subterm and then return true.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::isFuncNotRightArgs() {
+        if (tag != APP) return false;
+        if (notEnoughArgs) { fields[0]->notEnoughArgs = true; return true; }
+	spineTip(); // can use spineTip(int & x) here
+        int numargs = spinelength-1;
+        if (spinetip->isF() == false) return false;
+        pair<int,int> arity = getFuncEArity(spinetip->cname);
+        <<isFuncNotRightArgs::error handling>>
+	// if (arity > numargs) { 
+	if (numargs < arity.first) {
+                notEnoughArgs = true; fields[0]->notEnoughArgs = true; 
+                return true; 
+        }
+        // return (arity < numargs);
+	return (numargs > arity.second);
+}
+@ %def isFuncNotRightArgs
+
+\begin{comment}
+If the function is unknown, then we just return true as a conservative
+measure.
+\end{comment}
+
+<<isFuncNotRightArgs::error handling>>=
+if (arity.first == -1) return true;
+@ 
+
+\begin{comment}
+We now describe the {\tt reduce} function.
+We compute the subterms one by one in the left-to-right, outermost to 
+innermost order.
+For each subterm, we first determine whether it can possibly be a
+candidate redex.
+If not, we proceed to the next subterm.
+Otherwise, we attempt to match and reduce it using {\tt try\_match\_n\_reduce}.
+If this is successful, we return true.
+Otherwise, we proceed to the next subterm.
+The parameter {\tt tried} records the total number of candidate redexes
+actually tried by this function.
+All the other parameters are needed only by {\tt try\_match\_n\_reduce}.
+\end{comment}
+
+<<term::function declarations>>=
+bool reduce(vector<int> mpath, term * parent, unint cid, 
+     	    term * root, int & tried);
+bool reduce(vector<int> mpath, term * parent, unint cid, 
+     	    term * root, int & tried, bool lresort);
+bool reduceRpt(int maxstep, int & stepsTaken);
+bool reduceRpt() { int x; return reduceRpt(0, x); }
+@ %def reduce reduceRpt
+
+<<term::function definitions>>=
+bool term::reduce(vector<int> mpath, term * parent, unint cid,
+			 term * root, int & tried) {
+	if (reduce(mpath,parent,cid,root,tried,false)) return true;
+	// cerr << "Trying last resort rules" << endl;// setSelector(osel);
+	return reduce(mpath,parent,cid,root,tried,true);
+}
+@ 
+
+<<term::function definitions>>=
+bool term::reduce(vector<int> mpath, term * parent, unint cid,
+		      term * root, int & tried, bool lr) {
+	<<cannot possibly be a redex>>
+#ifdef ESCHER
+        <<cannot possibly be a redex 2>>
+#endif
+        tried++;
+	// if (try_disruptive(mpath, this, parent, cid, root, tried))
+	//	return true; 
+        if (try_match_n_reduce(mpath,this,parent,cid,root,tried,lr)) 
+                return true;
+
+not_a_redex:
+        if (tag == ABS) 
+	   	return fields[1]->reduce(mpath,this,1, root, tried,lr);
+        if (tag == MODAL) {
+                // return false; // to begin with, Escher does not handle this.
+		mpath.push_back(modality);
+                return fields[0]->reduce(mpath,this,0,root, tried, lr);
+        }
+        if (tag == APP) {
+                <<reduce::small APP optimization>>
+		if (lc()->reduce(mpath, this,0, root, tried, lr)) 
+		        return true;
+                return rc()->reduce(mpath,this,1, root, tried, lr);
+        } 
+        if (tag == PROD) {
+                unint dimension = fieldsize;
+                for (unint i=0; i!=dimension; i++)
+                        if (fields[i]->reduce(mpath, this, i, root, tried, lr))
+                                return true;
+                return false;
+        }
+	if (tag == F) return false;
+#ifdef ESCHER
+        setSelector(STDERR); cerr << "term = "; print(); ioprintln();
+        cerr << "tag = " << tag << endl; assert(false); 
+#endif
+        return false;
+}
+@ %def reduce
+
+\begin{comment}
+When we see a term of the form $(f\;t)$ where $f$ has effective arity
+greater than 1, we can immediately deduce that $f$ cannot be a redex.
+This would have been picked out if we recurse on $f$, but we can save
+a call to {\tt getFuncEArity} by having a special case here. 
+\end{comment}
+
+<<reduce::small APP optimization>>=
+#ifdef ESCHER
+if (lc()->isF() && notEnoughArgs) 
+        return rc()->reduce(mpath, this, 1, root, tried, lr);
+#endif
+@ 
+
+\begin{comment}
+It is easy to add code to calculate the occurrence of each subterm if
+this information is desired. 
+\end{comment}
+
+\begin{comment}
+The function {\tt reduceRpt} reduces an expression repeatedly until no
+further reduction is possible.
+The return value is true if the term is modified in the process; false
+otherwise.
+\end{comment}
+
+<<term::function definitions>>=
+bool term::reduceRpt(int maxstep, int & stepsTaken) {
+	int tried = 0; vector<int> modalPath;
+	bool reduced = true; bool rewritten = false;
+	int starttime = ltime;
+	while (reduced) { 
+		reduced = reduce(modalPath, NULL, 0, this, tried);
+		if (reduced) rewritten = true;
+		if (tag == D) break;
+		if ((maxstep > 0) && (ltime - starttime) > maxstep) break;
+		if (interrupted) break;
+	};
+	stepsTaken = ltime - starttime;
+	return rewritten;
+}
+@ %def reduceRpt
+
+\begin{comment}\label{com:pattern matching}
+The function {\tt reduce} uses the following function to try and match
+and reduce a candidate redex.
+The function {\tt try\_match\_n\_reduce} works as follows.
+Given a candidate redex, we first examine whether it can be simplified
+using the internal simplification routines of Escher.
+If so, we are done and can return.
+Otherwise, we try to pattern match (using {\tt redex\_match}) the
+candidate redex with the head of suitable statements in the program.
+If the head of a statement $h = b$ is found to match with {\tt candidate} 
+using some term substitution $\theta$, then we construct $b\theta$ and
+replace {\tt candidate} with $b\theta$.
+Depending on whether {\tt candidate} has a parent, we either only need
+to redirect a pointer or we need to replace in place. 
+\end{comment}
+
+<<terms.cc::local functions>>=
+#include "global.h"
+#include "pattern-match.h"
+static int nestingdepth = 0;
+<<try match>>
+<<try disruptive>>
+@ 
+
+<<try match>>=
+bool do_local_search = true;
+bool try_match_n_reduce(vector<int> mpath, term * candidate, 
+     			term * parent,unint cid, term * root, 
+			int & tried, bool lastresort) {
+	vector<substitution> theta; /* this cannot be made global because of 
+				       eager statements */
+        <<debug matching 1>>
+	<<try match::different simplifications>>
+        <<try match::try cached statements first>>
+			
+        candidate->spineTip();
+	if (!candidate->spinetip->isF()) return false;
+	int anchor = candidate->spinetip->cname;
+	if (anchor >= (int)grouped_statements.size()) return false;
+	statementType * sts = grouped_statements[anchor];
+	if (sts == NULL) return false;
+	while (sts != NULL) {
+		if (sts->lastresort != lastresort) { sts = sts->next; continue;}
+		if ((candidate->spinelength -1) != sts->numargs) 
+			{ sts = sts->next; continue; }
+		theta.clear();
+		term * head = sts->stmt->lc()->rc();
+		term * body = sts->stmt->rc();
+		<<debug matching 2>>
+		if (redex_match(head, candidate, theta)) {
+                        <<try match::eager statements>>
+                        ltime++;
+                        <<try match::unimportant things>>
+			term * temp = NULL;
+			if (sts->noredex) temp = body->reuse();
+			else {
+				temp = body->clone();
+				temp->subst(theta);
+				<<try match::reduce temp to simplest form>>
+			}
+			<<try match::put reduct in place>>
+			<<try match::output answer>>
+                        return true;
+		}
+		<<debug matching 4>>
+		sts = sts->next;
+	}
+	 
+	/* int bm_size = statements.size(); 
+        for (int j=0; j<bm_size; j++) {
+		if (statements[j].lastresort != lastresort) continue;
+                <try match::find special cases where no matching is required>
+                theta.clear();
+                term * head = statements[j].stmt->lc()->rc();
+                term * body = statements[j].stmt->rc();
+                <debug matching 2>
+		if (redex_match(head, candidate, theta)) {
+                        <try match::eager statements>
+			ltime++;
+                        <try match::unimportant things>
+                        term * temp = body->clone();
+                        temp->subst(theta);
+			<try match::reduce temp to simplest form>
+			<try match::put reduct in place>
+			<try match::output answer>
+                        return true;
+		}
+                <debug matching 4>
+	} */
+        return false;
+}
+@ %def try_match_n_reduce
+
+\begin{comment}
+Certain (sub)computations are cached in the vector {\tt cachedStatements}
+during run-time.
+We try out these cached statements first in simplifying a redex.
+The pattern matching operation used in this special case is just
+identity checking.
+Maybe we need to check for $\alpha$-equivalence in general.
+\end{comment}
+
+<<try match::try cached statements first>>=
+int cs_size = cachedStatements.size();
+for (int j=0; j!=cs_size; j++) {
+	term * head = cachedStatements[j]->stmt->lc()->rc();
+	term * body = cachedStatements[j]->stmt->rc();
+	theta.clear(); // vector<substitution> theta;
+	if (candidate->equal(head) || redex_match(head, candidate, theta)) {
+		// cerr << "Using cached computation." << endl;
+		term * temp = body->clone();
+		if (theta.size()) { temp->subst(theta); }
+		ltime++; cltime++; 
+		<<try match::put reduct in place>>
+		return true;
+	} 
+}
+@ 
+
+\begin{comment}
+This is how we put the reduct ({\tt temp}) in place of the redex 
+({\tt candidate}).
+Depending on whether {\tt candidate} has a parent, we either
+change some pointers or do an in-place replacement.
+\end{comment}
+
+<<try match::put reduct in place>>=
+if (parent) { parent->fields[cid] = temp; candidate->freememory(); }
+else { candidate->replace(temp); temp->freememory(); }
+@ 
+
+\begin{comment}
+In the proposed leftmost outermost reduction scheme, we need to find
+the leftmost outermost redex in $t^*$ immediately after rewriting a
+subterm $r$ in $t$ with $s$ to obtain $t^* = t[s/r]$.
+We are probably better off doing localised surgeries on terms.
+After one rewriting step, instead of looking for the next redex in
+$t^*$, we will try to reduce $s$ as much as possible before jumping out
+to consider reducing $t^*$.
+This simple change in the redex selection order speeds things up
+tremendously, at no cost to correctness.
+We will have problems with list/set comprehension though, in
+particular infinite lists and infinite sets.
+\end{comment}
+
+<<try match::reduce temp to simplest form>>=
+#ifdef ESCHER
+// do_local_search = false;
+if (!outermost && do_local_search && !lastresort && temp->tag != D) {
+	// cerr << "reduce temp to simplest form\n";
+	do_local_search = false;	
+	term * temp3 = NULL; // term * temp2 = NULL; 
+	if (optimise) { // temp2 = head->clone(); temp2->subst(theta); 
+		        // temp2->unshare(NULL, 1); 
+		        temp3 = temp->clone(); }
+        nestingdepth++;
+	int time_old = ltime;
+        temp->unshare(NULL, 1); // we should not need to do this operation
+	bool reduced = true;
+	int interval = 0; // this makes sure the local operation doesn't go 
+	                  // too deep, which can happen if we do this too early
+	while (reduced) {
+                reduced = temp->reduce(mpath,NULL,0, temp,tried);
+		if (temp->tag == D) break;
+		if (interval++ > 500) break;
+	}
+        nestingdepth--;
+	if (optimise) { <<try match::cache computation>> }
+	do_local_search = true;
+}
+#endif
+@ 
+
+<<try match::cache computation>>=
+if (ltime - time_old > 30 && head->isApp() && 
+    cacheFuncs.find(head->lc()->cname) != cacheFuncs.end()) {
+	// int osel = getSelector(); setSelector(STDERR);
+	//   temp3->print(); ioprint(" = "); temp->print();
+	//   ioprint("; -- "); ioprint(ltime-time_old); ioprintln();
+	//   ioprintln(); setSelector(osel);
+	statementType * st = new statementType();
+	st->stmt = newT2Args(F, iEqual); 
+	st->stmt->initT2Args(temp3, temp->clone());
+	temp3->labelStaticBoundVars(); // temp->labelStaticBoundVars();
+	st->stmt->collectSharedVars();
+	cachedStatements.push_back(st);
+} else temp3->freememory();
+@ 
+
+\begin{comment}
+The different simplification routines described in \ref{subsec:simplification}
+are used here.
+We check the form of {\tt candidate} before attempting to apply suitable
+routines.
+\end{comment}
+
+<<try match::different simplifications>>=
+int msg = -5;
+if (candidate->isFunc2Args()) {
+        int f = candidate->spineTip()->cname;
+        if (f == iEqual) {
+                if (candidate->simplifyEquality(parent, cid)) 
+			{ msg = 1; <<simpl output>> }
+        } else if (f == iAnd) {
+                if (candidate->simplifyConjunction()) 
+			{ msg = 2; <<simpl output>> }
+                if (candidate->simplifyConjunction2(parent, cid)) 
+			{ msg = 3; <<simpl output>> }
+        }
+        if (candidate->simplifyInequalities(parent, cid)) 
+                { msg = 4; <<simpl output>> }
+
+        if (candidate->simplifyArithmetic(parent, cid)) 
+		{ msg = 5; <<simpl output>> }
+}
+if (candidate->isApp()) {
+        if (candidate->simplifyExistential(parent, cid)) 
+		{ msg = 6; <<simpl output>> }
+
+        if (candidate->simplifyUniversal(parent, cid)) 
+                { msg = 7; <<simpl output>> }
+
+        if (candidate->betaReduction(parent, cid)) 
+		{ msg = 8; <<simpl output>> }
+
+	if (candidate->simplifyMath(parent, cid))
+		{ msg = 9; <<simpl output>> }
+}
+@ 
+
+\begin{comment}
+The redex is marked out in the answer.
+We do not print the term before the simplification; that would be too
+messy though.
+\end{comment}
+
+<<simpl output>>=
+ltime++;
+//if (verbose && ltime % 100 == 0) { 
+if (verbose) {
+	int osel = getSelector(); setSelector(STDOUT);
+	ioprint("Time = "); ioprintln(ltime);
+	switch (msg) {
+	case 1: ioprint(eqsimpl); break;
+	case 2: ioprint(andsimpl); break;
+	case 3: ioprint(and2simpl); break;
+	case 4: ioprint(ineqsimpl); break;
+	case 5: ioprint(arsimpl); break;
+	case 6: ioprint(exsimpl); break;
+	case 7: ioprint(uvsimpl); break;
+	case 8: ioprint(betasimpl); break;
+	case 9: ioprint(mathsimpl); break;
+	}
+	candidate->redex = true; 
+	ioprint("Answer: "); root->print(); ioprint("\n\n"); 
+	candidate->redex = false; setSelector(osel); 
+ }
+return true;
+@ 
+
+\begin{comment}
+We now look at how eager statements are handled.
+When we matched a subterm of the form $(f\;t_1\ldots t_n)$ with the
+head of a statement that is to be evaluated eagerly, we proceed to
+evaluate the arguments $t_1$ to $t_n$ first.
+The whole expression can only be rewritten if none of the $t_i$s
+contain a redex. 
+\end{comment}
+
+<<try match::eager statements>>=
+if (sts->eager && candidate->isApp()) {
+	/* try reduce the arguments first, return
+	   true if any one can be reduced */
+	for (int i=candidate->spinelength-1; i!=0; i--) {
+		/* go to argument spinelength - i argument */
+		term * arg = candidate;
+		for (int j=1; j!=i; j++) arg = arg->lc();
+		if (arg->rc()->reduce(mpath,arg,1,root, tried)) 
+			return true;
+	}
+}
+@ 
+
+\begin{comment}
+We are done talking about important things.
+We now list the not-so-important things like reporting and debugging
+checks.
+\end{comment}
+
+<<try match::unimportant things>>=
+<<try match::debugging code 1>>
+<<debug matching 3>>
+<<try match::output pattern matching information>>
+@ 
+
+<<try match::output pattern matching information>>=
+	      //if (verbose && ltime % 100 == 0) {
+if (verbose) {
+        int osel = getSelector(); setSelector(STDOUT);
+        ioprint("Time = "); ioprintln(ltime);
+        ioprint("Matched "); head->print(); ioprintln(); // ioprint(" and ");
+        // // candidate->print();
+        // // ioprint("\nReplacing with "); body->print(); ioprint(' '); 
+        // // printTheta(theta);
+
+        candidate->redex = true;
+        ioprint("Query:  "); root->print(); ioprintln();
+        candidate->redex = false; setSelector(osel);
+} 
+@ 
+
+<<try match::output answer>>=
+//if (verbose && ltime % 100 == 0) { 
+if (verbose) {
+        int osel = getSelector(); setSelector(STDOUT);     
+        ioprint("Answer: "); root->print(); ioprint("\n\n"); setSelector(osel);}
+@ 
+
+\begin{comment}
+This is a simple check to make sure the candidate redex and the
+instantiated head are really $\alpha$-equivalent.
+\end{comment}
+
+<<try match::debugging code 1>>=
+#ifdef MAIN_DEBUG1
+
+term * head1 = head->clone();
+head1->subst(theta);
+head1->applySubst();
+assert(head1->equal(candidate));
+
+#endif
+@ 
+
+\begin{comment}
+These code allows us to track what is going on during matching.
+\end{comment}
+
+<<debug matching 1>>=
+if (verbose == 3) {
+        setSelector(STDOUT);
+        ioprint("Trying to redex match "); candidate->print(); ioprintln();
+}
+@ 
+
+<<debug matching 2>>=
+if (verbose == 3) { ioprint("\tand "); head->print(); ioprint(" ... "); }
+@ 
+
+<<debug matching 3>>=
+if (verbose == 3) ioprint("\t[succeed]\n");
+@ 
+
+<<debug matching 4>>=
+if (verbose == 3) ioprint("\t[failed]\n");
+@ 
+
+\begin{comment}
+We now look at disruptive operations.
+\end{comment}
+
+<<try disruptive>>=
+/*
+bool try_disruptive(vector<int> mpath, term * candidate, 
+     		    term * parent, unint cid, term * root, 
+		    int & tried) {
+	int osel = getSelector(); setSelector(SILENT);
+	if (candidate->isFunc2Args(iAssign)) {
+		term * arg1 = candidate->lc()->rc();
+		// reduce arg2
+		ioprint("simplifying "); candidate->rc()->print(); ioprintln();
+		int tried2 = 0;
+                bool reduced = true;
+                while (reduced) { 
+                        reduced = candidate->rc()->reduce(mpath,NULL, 
+				  	       0, root, tried2);
+                        if (candidate->rc()->tag == D) break;
+                };
+		ioprint("result = "); candidate->rc()->print(); ioprintln();
+		// update statement 
+		for (unint i=0; i!=statements.size(); i++) {
+		    if (statements[i].anchor == arg1->cname) {
+		       	    assert(statements[i].persistent);
+		            statements[i].stmt->rc()->freememory();
+			    statements[i].stmt->fields[1] = candidate->rc();
+
+			    statements[i].stmt->print(); ioprintln();
+			    setSelector(osel);
+			    break;
+		    }
+		}
+		// candidate = Succeed
+		candidate->fields[1] = NULL;
+		term * temp = new_term(D, iSucceeded);
+		if (parent) { parent->fields[cid] = temp;
+		              candidate->freememory(); }
+		else { candidate->replace(temp); temp->freememory(); }
+		return true;
+	}
+	return false;
+}
+*/
+@ 

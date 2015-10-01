@@ -1,0 +1,1347 @@
+% -*- mode: Noweb; noweb-code-mode: c++-mode; c-basic-offset: 8; -*-
+%% \begin{flushright}
+%% Mathematicians are like Frenchmen: \\
+%% whatever you say to them they translate into their own language, \\
+%% and forthwith it is something entirely different.\\
+%% {\em Johann Wolfgang von Goethe} % (1749 - 1832)
+%% \end{flushright}
+%% 
+%% The setting we use for representing individuals is a polymorphically
+%% typed higher-order logic (see \cite{lloyd02logic}). This provides a
+%% variety of data types for representing individuals. The following is a
+%% summary of the relevant parts of the logic. Some formal definitions
+%% from \cite[\S 3]{lloyd02logic} are reproduced here. 
+%% %% One can think of all the data type classes, defined here and in
+%% %% AlkemyBase, as the set of type constructors, and the instances
+%% %% defined by the read function of all the nullary type constructors
+%% %% as the set of constants. 
+%% 
+%% \section{Overview of Higher-order Logic}
+%% \label{subsec:logic overview}
+%% In brief, the logic is based on the simple theory of types
+%% \cite{church} with several extensions, the
+%% most significant of which is the polymorphic extension to the type
+%% system.  The alphabet of the logic consists of four sets, a set
+%% $\mathfrak{T}$ of type constructors, a set $\mathfrak{P}$ of
+%% parameters (type variables), a set $\mathfrak{C}$ of constants, and a
+%% set $\mathfrak{V}$ of variables. Always included in the set
+%% $\mathfrak{T}$ are type constructors {\bf 1} and $\Omega$ both of
+%% arity 0. {\bf 1} is the type of some distinguished singleton set and
+%% $\Omega$ is the type of the booleans. The types of the logic are built
+%% up from the set of type constructors and the set of parameters using
+%% the symbols $\rightarrow$ and $\times$. The former is used to
+%% construct function types, the latter, product types. A type is closed
+%% if it contains no type variables. The set of all closed types is
+%% denoted by $\mathfrak{S}^c$. 
+%% 
+%% $\mathfrak{C}$ is the set of constants of various types. The two
+%% constants $\top$ (true) and $\bot$ (false) are always included in
+%% it. One can distinguish between two kinds of constants, \emph{data
+%% constructors} and \emph{functions}. In a knowledge representation
+%% context, data constructors are used to represent individuals. In a
+%% programming language context, data constructors are used to
+%% construct data values whereas functions are used to compute on data
+%% values. Functions have definitions, data constructors do not. In the
+%% semantics of the logic, which is a Henkin model
+%% \cite{henkin50completeness}, the data constructors are used to
+%% construct models \cite{lloyd02logic}.  
+%% 
+%% The terms of the logic are the terms of the typed $\lambda$-calculus,
+%% which are formed in the usual way by abstraction and application (or
+%% juxtaposition) from constants and variables. Products of terms can
+%% also be formed using a tuple-forming notation $(\dots)$. 
+%% % A formula is a term of type $\Omega$. A predicate is a function
+%% % whose co-domain has type $\Omega$. 
+%% The set of all terms is denoted by $\mathfrak{L}$ (for language).
+%% 
+%% \section{Basic Terms}
+%% \label{subsec:basic terms}
+%% A suitable class of closed terms called basic terms are used to
+%% represent individuals in our application domains. Before giving the
+%% definition of basic terms, we need a few more concepts. These will be
+%% developed in stages as needed. First, we identify a subset of terms
+%% called normal terms that are suitable for knowledge representation. We
+%% point out the undesirable non-uniqueness of normal terms and describe
+%% a way to solve this problem. Finally, we define basic terms as the
+%% distinguished representatives of equivalence classes of normal terms. 
+%% 
+%% For reasons that will become clear, we need the concept of a
+%% default term for each type. For example, we can use 0 as the default
+%% term for integers, false for the booleans, etc. The set of default
+%% terms is denoted by $\mathfrak{D}$.
+%% 
+%% \paragraph{Normal Terms}
+%% We now give the definition of normal terms.
+%% \begin{definition}
+%% The set of {\em normal terms}, $\mathfrak{N}$, is defined inductively
+%% as follows.
+%% 
+%% \begin{enumerate}
+%% \item If $C$ is a data constructor having signature 
+%%       $\sigma_1 \rightarrow \cdots \rightarrow \sigma_n \rightarrow (T
+%%       \; a_1 \ldots a_k)$ and $t_1, \ldots, t_n \in \mathfrak{N}$ $(n
+%%       \geq 0$) such that $C \; t_1 \ldots t_n \in \mathfrak{L}$, then
+%%       $C \; t_1 \ldots t_n \in \mathfrak{N}$.
+%% 
+%% \item If $t_1, \ldots, t_n \in \mathfrak{N}$, 
+%%       $s_1, \ldots, s_n \in \mathfrak{N}$ $(n \geq 0$), $s_0 \in
+%%       \mathfrak{D}$ and \[ \lambda x.\mathit{if} \; x = t_1 \;
+%%       \mathit{then} \; s_1 \; \mathit{else} \; \ldots \; \mathit{if}
+%%       \; x = t_n \; \mathit{then} \; s_n \; \mathit{else} \; s_0 \in
+%%       \mathfrak{L}, \] then \[ \lambda x.\mathit{if} \; x = t_1 \;
+%%       \mathit{then} \; s_1 \; \mathit{else} \; \ldots \; \mathit{if}
+%%       \; x = t_n \; \mathit{then} \; s_n \; \mathit{else} \; s_0 \in
+%%       \mathfrak{N}. \]
+%% 
+%% \item If $t_1, \ldots, t_n \in \mathfrak{N}$ $(n \geq 0$) and 
+%%       $(t_1, \ldots, t_n) \in \mathfrak{L}$, then $(t_1, \ldots, t_n)
+%%       \in \mathfrak{N}$.
+%% \end{enumerate}
+%% \end{definition}
+%% 
+%% Normal terms formed from Part 1 of the definition through application
+%% are called \emph{normal structures} and always have a type of the form
+%% $T \alpha_{1} \dots \alpha_{n}$. Thus, we obtain atomic
+%% individuals like natural numbers, integers, etc, from data
+%% constructors with 0 arity, and more complicated structures like lists,
+%% trees from data constructors with non-zero arities.
+%% 
+%% Normal terms formed from Part 2 of the definition through lambda
+%% abstraction are called \emph{normal abstractions}. They always have a
+%% type of the form $\beta \rightarrow \gamma$. This class of normal
+%% terms are essentially a form of finite lookup tables, where the value
+%% for element $t_{n}$ is $s_{n}$. Now we see why default terms are
+%% needed. In a finite lookup table, only values for a (small) set of
+%% elements are usually defined. To implement a complete lookup table
+%% defined for all elements of a certain type, we can simply define all
+%% elements that are not explicitly specified as having the default
+%% value. The lambda function definition is mathematically very neat,
+%% allowing one to model sets, multisets and similar data types
+%% intensionally. 
+%% 
+%% To see how this can be done, consider the set
+%% $\{1,2\}$. In higher-order logic, sets can be viewed as predicates. 
+%% For the  given set, we can represent it intensionally using the term 
+%% \begin{gather} 
+%% \lambda x. \text{if} \; x = 1 \; \text{then} \; \top \; \text{else} \;
+%% \text{if} \; x = 2 \; \text{then} \; \top \; \text{else} \; \bot.
+%% \label{f0} 
+%% \end{gather}
+%% Similarly, a multiset with 4 occurrences of A and 23 occurrences of B
+%% can be represented intensionally as the term
+%% \[ \lambda x. \text{if} \; x = A \; \text{then} \; 4 \; \text{else} \;
+%% \text{if} \; x = B \; \text{then} \; 23 \; \text{else} \; 0. \]
+%% 
+%% Part 3 of the definition simply states that one can form a tuple from
+%% normal terms to obtain another normal term. Terms formed in this way
+%% are called \emph{normal tuples} and they always have a type of the form
+%% $\alpha_{1} \times \dots \times \alpha_{n}$.
+%% 
+%% One problem with the use of normal terms as the knowledge
+%% representation language is that normal abstractions are not unique,
+%% \ie there are syntactically different normal terms that mean the same
+%% thing. Going back to the example $\{1,2\}$ above, we can see that the
+%% following two function definitions, though syntactically different,
+%% are semantically equivalent to the one given earlier.
+%% \begin{gather} 
+%% \lambda x. \text{if} \; x = 2 \; \text{then} \; \top \; \text{else} \;
+%% \text{if} \; x = 1 \; \text{then} \; \top \; \text{else} \; \bot
+%% \label{f1} \\ 
+%% \lambda x. \text{if} \; x = 2 \; \text{then} \; \top \; \text{else} \;
+%% \text{if} \; x = 1 \; \text{then} \; \top \; \text{else} \; \text{if}
+%% \; x = 3 \; \text{then} \; \bot \; \text{else} \; \bot \label{f2}  
+%% \end{gather}
+%% To understand the way to fix this undesirable property of normal
+%% abstractions, we need to go no further than the two illustrative
+%% function definitions above. Function definition ~\ref{f1} is different
+%% from function ~\ref{f0} only in the order of the subterms of the form
+%% $x = y$. Function definition ~\ref{f2}, in addition to the difference
+%% in order, contains redundant declarations. The intuitive idea is to
+%% devise a \emph{regularise} procedure that, when given
+%% syntactically different but semantically equivalent normal terms of a
+%% particular type, is able to \emph{reduce}, through syntactic
+%% manipulation, the different terms into identical ones. For example,
+%% given function ~\ref{f1}, it will try to re-order the subterms. Given
+%% function ~\ref{f2}, it will first remove redundant declarations and
+%% then re-order the subterms.
+%% 
+%% To devise such a procedure, we need to have more mathematical
+%% tools. Firstly, we need to define a strict total order $<$ on the
+%% normal terms, which can be used to order the elements of normal
+%% abstractions. Secondly, we need to define an equivalence relation
+%% $\equiv$ on normal terms of a certain type, which can be used to
+%% identify and remove redundant elements of a function
+%% definition. Obviously, the equivalence relation needs to be defined in
+%% a way such that normal terms of a certain type denoting the same
+%% individual belong to the same equivalence class. We can then pick out
+%% one representative term from each equivalence class and use these as
+%% the knowledge representative language. Given a normal term, it is the
+%% unique representative term of the equivalence class in which the term
+%% belongs that our \emph{regularise} procedure will return. The set
+%% of all such unique representative terms is called the basic terms, the
+%% formal definition of which is given in the following paragraph. The
+%% reader is referred to Section 3 of \cite{lloyd02logic} for a detailed
+%% formalisation of the ideas presented in this section.
+%% 
+%% \paragraph{Basic Terms}
+%% \label{par:basic terms}
+%% \begin{definition}
+%% The set of {\em basic terms}, $\mathfrak{B}$, is defined inductively
+%% as follows.
+%% \begin{enumerate}
+%% \item If $C$ is a data constructor having signature 
+%%       $\sigma_1 \rightarrow \cdots \rightarrow \sigma_n \rightarrow (T
+%%       \; a_1 \ldots a_k)$ and $t_1, \ldots, t_n \in \mathfrak{B}$ $(n
+%%       \geq 0$) such that $C \; t_1 \ldots t_n \in \mathfrak{L}$, then
+%%       $C \; t_1 \ldots t_n \in \mathfrak{B}$.
+%% 
+%% \item If $t_1, \ldots, t_n \in \mathfrak{B}$, 
+%%       $s_1, \ldots, s_n \in \mathfrak{B}$, $t_1 < \ldots < t_n$, $s_i
+%%       \not\in \mathfrak{D}$, for $1 \leq i \leq n$ $(n \geq 0)$, $s_0
+%%       \in \mathfrak{D}$ and \[ \lambda x.\mathit{if} \; x = t_1 \;
+%%       \mathit{then} \; s_1 \; \mathit{else} \; \ldots \; \mathit{if}
+%%       \; x = t_n \; \mathit{then} \; s_n \; \mathit{else} \; s_0 \in
+%%       \mathfrak{L}, \] then \[ \lambda x.\mathit{if} \; x = t_1 \;
+%%       \mathit{then} \; s_1 \; \mathit{else} \; \ldots \; \mathit{if}
+%%       \; x = t_n \; \mathit{then} \; s_n \; \mathit{else} \; s_0 \in
+%%       \mathfrak{B}. \]
+%% 
+%% \item If $t_1, \ldots, t_n \in \mathfrak{B}$ $(n \geq 0$) and 
+%%       $(t_1, \ldots, t_n) \in \mathfrak{L}$, then $(t_1, \ldots, t_n)
+%%       \in \mathfrak{B}$.
+%% \end{enumerate}
+%% \end{definition}
+%% 
+%% The basic terms from Part 1 of the definition are called {\em basic
+%% structures}, those from Part 2 are called {\em basic abstractions},
+%% and those from Part 3 are called {\em basic tuples}.
+
+\section{Types}
+\begin{comment}
+Types are defined inductively in the logic, thus lending itself nicely
+to the use of composite pattern \cite[p.163]{gamma95patterns} for its
+implementation. 
+% Figure ~\ref{fig:typeDiagram} shows the structure of the classes involved.
+% \begin{figure}[!htbp]
+% \begin{center}
+%  \includegraphics[width=13cm]{FIG/typeDiagram.eps}
+%  \caption{The structure of the type classes.}
+%  \label{fig:typeDiagram}
+% \end{center}
+% \end{figure}
+
+We differentiate between atomic and composite types. 
+Atomic types are obtained from type constructors with arity 0. 
+Examples of these include $int$, $float$, $nat$, $char$, $string$, etc. 
+(Note that $string$ is a nullary type constructor in this case. 
+Strings in general can also be constructed from $List \; char$.) 
+They are the base types, and occupy the leaf nodes of a composite type
+structure. 
+Everything else are composite types. 
+Examples of composite types include types obtained from type
+constructors of non-zero arity like $List \; \alpha$, $Btree \; \alpha$, 
+$Graph \; \alpha \; \beta$, etc; function types like $set \; \alpha$ 
+(this is equivalent to $\alpha \rightarrow \varOmega$) and 
+$multiset \; \alpha$ ($\alpha \rightarrow nat$); and product types 
+obtained from the tuple-forming operator.
+
+The following is an outline of the data types module. 
+We first give the abstract classes, followed by the actual data types. 
+\end{comment}
+
+<<types.h>>=
+#ifndef _DATATYPE_H_
+#define _DATATYPE_H_
+
+#include <set>
+#include <vector>
+#include <string>
+#include <assert.h>
+#include <iostream>
+using namespace std;
+#define dcast dynamic_cast
+#define unint unsigned int
+
+extern const string underscore, alpha, Parameter, Tuple, Arrow, 
+		    gBool, gInt, gFloat, gChar, gString;
+
+<<type::function declarations>>
+<<type::type>>
+<<type::composite types>>
+<<type::parameters>>
+<<type::tuples>>
+<<type::algebraic types>>
+<<type::abstractions>>
+<<type::synonyms>>
+
+#endif
+@ 
+
+<<types.cc>>=
+#include "types.h"
+#include <stdlib.h>
+
+
+<<type::functions>>
+<<type::composite types::implementation>>
+<<type::parameters::implementation>>
+<<type::tuples::implementation>>
+<<type::algebraic types::implementation>>
+<<type::abstractions::implementation>>
+@ 
+
+\begin{comment}
+The top-level \dstruct{type} structure contains as members those
+variables and functions that are common to all types. 
+Every type obviously has a name. 
+
+The functions \func{setAlpha} and \func{addAlpha} are used to
+configure subtypes; they are defined only for composite types like
+tuples and list. (See Comment \ref{com:composite types} for details.) 
+\end{comment}
+
+<<type::type>>=
+class type {
+public:
+        int count;
+        type() { count = 0; }
+        type(string n) : tag(n) { count = 0; }
+        virtual ~type() {}
+        virtual void setAlpha(type * x, unsigned int y) {}
+        virtual void addAlpha(type * x) {}
+        virtual type * getAlpha(unsigned int x) { return NULL; }
+        virtual int alphaCount() { return 0; }
+        virtual bool isComposite() { return false; }
+        virtual bool isTuple() { return false; }
+        virtual bool isAbstract() { return false; }
+        virtual bool isParameter() { return false; }
+        virtual bool isSynonym() { return false; }
+        virtual bool isUdefined() { return false; }
+        virtual string getName() { return tag; }
+        virtual string & getTag() { return tag; }
+        virtual type * clone() { count++; return this; }
+        virtual void deccount() { count--; }
+        virtual void getParameters(set<string> & ret) {}
+        virtual void renameParameters() {}
+        virtual void renameParameter(string name) {}
+protected:      
+        string tag;
+};
+@ 
+
+\begin{comment}
+We use reference counting for the memory management of the base types. 
+The variable \dstruct{count} keeps track of the number of references to 
+a type. 
+Deallocation of a type structure is done using the function 
+\func{delete-type} defined as follows.
+\end{comment}
+
+<<type::type>>=
+void delete_type(type * x);
+@ %def delete_type
+
+<<type::functions>>=
+void delete_type(type * x) {
+        // if (x->isComposite() || x->isParameter()) assert(x->count == 0);
+        if (x->count == 0) delete x; else x->deccount(); 
+}
+@ %def delete_type
+
+\begin{comment}\label{com:composite types}
+The following is the class declaration for composite types. 
+The member \dstruct{alpha} stores the sub-types in the composite structure. 
+It serves different purposes for different kinds of composite types.
+\end{comment}
+
+<<type::composite types>>=
+class type_composite : public type {
+protected:
+        vector<type *> alpha;
+public:
+        virtual ~type_composite(); 
+        bool isComposite() { return true; }
+        virtual void deccount();
+        virtual void setAlpha(type * x, unsigned int y); 
+        virtual void addAlpha(type * x) { alpha.push_back(x); }
+        virtual type * getAlpha(unsigned int x);  
+        virtual int alphaCount() { return alpha.size(); }
+        virtual string getName();
+        virtual type * clone() { assert(false); }
+        virtual void getParameters(set<string> & x);
+        virtual void renameParameters();
+        virtual void renameParameter(string name);
+};
+@ 
+
+<<type::composite types::implementation>>=
+type_composite::~type_composite() {
+        for (unsigned int i=0; i!=alpha.size(); i++) delete_type(alpha[i]);
+}
+
+<<type::composite types::implementation>>=
+void type_composite::deccount() {
+        count--;
+        for (unsigned int i=0; i!=alpha.size(); i++) alpha[i]->deccount();
+}
+
+<<type::composite types::implementation>>=
+void type_composite::setAlpha(type * x, unsigned int y) 
+      { assert(y < alpha.size()); alpha[y] = x; }
+
+type * type_composite::getAlpha(unsigned int x) 
+      { assert(x < alpha.size()); return alpha[x]; }
+
+string type_composite::getName() { assert(false); return ""; }
+@ 
+
+\begin{comment}
+The following functions are used during unification and type-checking. 
+The first one collects in a set all the parameters in a type. 
+This is used in the unification algorithm. 
+The second and third functions are used to rename parameters during 
+instantiation and type checking. 
+\end{comment}
+
+<<type::composite types::implementation>>=
+void type_composite::getParameters(set<string> & ret) {
+        for (unsigned int i=0; i!=alpha.size(); i++)
+                alpha[i]->getParameters(ret);
+}
+@ %def getParameters
+
+<<type::composite types::implementation>>=
+void type_composite::renameParameters() {
+        set<string> ps; 
+	getParameters(ps);
+        set<string>::iterator p = ps.begin();
+        while (p != ps.end()) { renameParameter(*p); inc_counter(); p++; }
+}
+void type_composite::renameParameter(string name) {
+        for (unsigned int i=0; i!=alpha.size(); i++)
+                alpha[i]->renameParameter(name);
+}
+@ %def renameParameters renameParameter
+
+\begin{comment}
+Parameters are type variables.
+\end{comment}
+
+<<type::parameters>>=
+class type_parameter : public type {
+public: type_parameter();
+	type_parameter(string x) { tag = Parameter; vname = x; }
+        type * clone() { return new type_parameter(vname); }
+        bool isParameter() { return true; }
+        string getName() { return tag + underscore + vname; }
+        void getParameters(set<string> & ret); 
+        void renameParameters();
+        void renameParameter(string name);
+private:
+        string vname;
+};
+
+extern string newParameterName();
+@ 
+
+\begin{comment}
+When we create a new type parameter, a distinct name of the form
+\dstruct{alpha\_i} where \dstruct{i} is a number will be assigned to
+the parameter.
+\end{comment}
+
+<<type::parameters::implementation>>=
+#include "global.h"
+static int parameterCount = 0;
+type_parameter::type_parameter() {
+	tag = Parameter; vname = newParameterName(); }
+@ 
+
+\begin{comment}
+New parameter names are created using this next function.
+The variable \dstruct{parameterCount} is used here as the index
+for new parameter names.
+This function can be replaced with {\tt newVar} in terms.nw.
+\end{comment}
+
+<<type::parameters::implementation>>=
+string newParameterName() {
+ 	string vname = alpha + numtostr(parameterCount++);
+ 	return vname;
+}
+
+<<type::parameters::implementation>>=
+void type_parameter::getParameters(set<string> & ret) {
+        string temp = tag + underscore + vname; 
+        ret.insert(temp); 
+}
+
+<<type::parameters::implementation>>=
+void type_parameter::renameParameters() 
+      { string temp = tag+underscore+vname; renameParameter(temp); inc_counter(); }
+@ 
+
+\begin{comment}
+If a parameter has been indexed, we will first remove its index and
+then attach a new one. 
+The function \func{rfind} returns \dstruct{npos} if an underscore
+cannot be found in \dstruct{vname}.
+(Search proceeds from the end of \dstruct{vname}.)
+\end{comment}
+
+<<type::parameters::implementation>>=
+void type_parameter::renameParameter(string name) {
+        string tname = tag + underscore + vname;
+        if (tname != name) return;
+        char temp[10]; sprintf(temp, "_%d", get_counter_value());
+
+	unint i = vname.rfind(underscore);
+	if (i >= 0 && i < vname.size()) vname.erase(i, vname.size()-i);
+
+        string temp2(temp); vname = vname + temp2;
+}
+@ 
+
+\begin{comment}
+Some times, parameters need to be renamed to avoid name capture. 
+We use a global counter for this purpose.
+\end{comment}
+
+<<type::function declarations>>=
+void inc_counter();
+int get_counter_value();
+@ 
+
+<<type::functions>>=
+static int counter = 0;
+void inc_counter() { counter++; }
+int get_counter_value() { return counter; }
+@ %def inc_counter get_counter_value
+
+\begin{comment}
+Users can define type synonyms of the form $t_1 = t_2$, where $t_1$ is
+an identifier and $t_2$ the actual type.
+These are handled using the following class.
+The identifier $t_1$ is stored in \dstruct{tname}; the actual type
+$t_2$ is stored in \dstruct{actual}.
+\end{comment}
+
+<<type::synonyms>>=
+class type_synonym : public type {
+public:  
+        type_synonym(string name, type * ac)  
+              { tag = name; tname = name; actual = ac; }
+        ~type_synonym() { delete_type(actual); }
+        type * clone() { 
+		// assert(actual); count++; actual->count++; return this; } 
+		assert(actual);return new type_synonym(tname,actual->clone());}
+        void deccount() { assert(false); }
+        bool isSynonym() { return true; }
+        type * getActual() { return actual; }
+	string getName() { return actual->getName(); }
+private: 
+        type * actual;
+        string tname;
+};
+@ 
+
+\begin{comment}
+We support the following base types: boolean, integer, float point
+number and string.  
+Natural number is not supported because we can always use integer in
+its place.
+\end{comment}
+
+\begin{comment}
+The following is used to create product types. 
+\end{comment}
+
+<<type::tuples>>=
+class type_tuple : public type_composite {
+public:
+        type_tuple() { tag = Tuple; }
+        type * clone();
+        bool isTuple() { return true; }
+        string getName();
+};
+@ 
+
+<<type::tuples::implementation>>=
+type * type_tuple::clone() {
+        type_tuple * ret = new type_tuple;
+        for (int i=0; i!=alphaCount(); i++)
+                ret->addAlpha(alpha[i]->clone());
+        return ret;
+}
+@ 
+
+<<type::tuples::implementation>>=
+string type_tuple::getName() {
+        string ret = "( ";
+        for (unsigned int i=0; i!=alpha.size()-1; i++)
+                ret = ret + alpha[i]->getName() + " * ";
+	ret = ret + alpha[alpha.size()-1]->getName() + ")";
+        return ret;
+}
+@ 
+
+\begin{comment}
+This is used for the construction of function types.
+It is worth mentioning that sets and multisets have function types.
+
+Function types of particular interest here are those for
+transformations. 
+The variable \dstruct{rank} is used to record the rank of
+transformations. 
+This value can be calculated using \func{compRank}.
+The functions \func{getSource} and \func{getTarget} returns the source
+and target of a transformation.
+The function \func{getArg} returns the $n$-th argument.
+\end{comment}
+
+<<type::abstractions>>=
+class type_abs : public type_composite {
+public:
+        int rank;
+        type_abs() { tag = Arrow; rank = -5; }
+	type_abs(type * source, type * target) {
+		tag = Arrow; rank = -5;
+		addAlpha(source); addAlpha(target);
+	}
+        bool isAbstract() { return true; }
+        type * clone();
+        type * getArg(int n);
+        type * getSource();
+        type * getTarget();
+        string getName();
+        int compRank();
+};
+@ %def getArg getSource getTarget
+
+<<type::abstractions::implementation>>=
+type * type_abs::clone() {
+        type_abs * ret = new type_abs(alpha[0]->clone(), alpha[1]->clone());
+        ret->rank = rank; 
+        return ret;
+}
+@ 
+
+<<type::abstractions::implementation>>=
+string type_abs::getName() {
+        string ret;
+        if (alpha[0]->isComposite()) 
+                ret = "(" + alpha[0]->getName() + ") -> ";
+        else ret = alpha[0]->getName() + " -> ";
+        if (alpha[1]->isComposite()) 
+                ret = ret + "(" + alpha[1]->getName() + ")";
+        else ret = ret + alpha[1]->getName();
+        return ret;
+}
+@ 
+
+<<type::abstractions::implementation>>=
+type * type_abs::getArg(int n) {
+        assert(n < rank);
+        type * p = this;
+        int temp = 0;
+        while (temp != n) { p = p->getAlpha(1); temp++; }
+        return p->getAlpha(0);
+}
+@ %def getArg
+
+<<type::abstractions::implementation>>=
+type * type_abs::getSource() {
+        assert(rank != -5); 
+        type * p = this; 
+        for (int i=0; i!=rank; i++) p = p->getAlpha(1); 
+        assert(p->getAlpha(0)); return p->getAlpha(0);
+}
+@ %def getSource
+
+<<type::abstractions::implementation>>=
+type * type_abs::getTarget() {
+        assert(rank != -5);
+        type * p = this;
+        for (int i=0; i!=rank; i++) p = p->getAlpha(1);
+        return p->getAlpha(1);
+}
+@ %def getTarget
+
+\begin{comment}
+This function computes the rank of a transformation.
+We inspect the spine of the type and count the number of predicate
+types appearing in it.
+\end{comment}
+
+<<type::abstractions::implementation>>=
+int type_abs::compRank() {
+        if (alpha[1]->isAbstract() && alpha[0]->isAbstract() && 
+            alpha[0]->getAlpha(1)->getTag() == gBool) {
+                type_abs * t = dcast<type_abs *>(alpha[1]);
+                return 1 + t->compRank();
+        }
+        return 0;
+}
+@ %def compRank
+
+\begin{comment}
+Algebraic types are supported using the following classes.
+The class \dstruct{type\_udefined} supports nullary type constructors;
+the class \dstruct{type\_alg} supports non-nullary type constructors.
+Perhaps it makes sense to combine the two in one type.
+\end{comment}
+
+<<type::algebraic types>>=
+class type_udefined : public type {
+        const vector<string> values;
+public:
+        type_udefined(string & tname, const vector<string> &vals) 
+                : type(tname), values(vals) {}
+        type_udefined(string & tname) : type(tname) {}
+	bool isUdefined() { return true; }
+        // type * clone() { count++; return this; }
+        const vector<string> & getValues() { return values; }
+};
+@ 
+
+<<type::algebraic types>>=
+class type_alg : public type_composite {
+public:
+        type_alg(string tid) { tag = tid; }
+        type_alg(string tid, vector<type *> x) {
+                tag = tid; 
+                for (unsigned int i=0; i!=x.size(); i++) 
+                        addAlpha(x[i]->clone()); 
+        }
+        type_alg(string tid, type_tuple * x) {
+                tag = tid;
+                for (int i=0; i!=x->alphaCount(); i++)
+                        addAlpha(x->getAlpha(i)->clone());
+        }
+        type * clone() { return new type_alg(tag, alpha); }
+        string getName();
+};
+@
+
+<<type::algebraic types::implementation>>=
+string type_alg::getName() {
+        string ret = "(" + tag;
+        for (unint i=0; i!=alpha.size()-1; i++) 
+                ret = ret + " " + alpha[i]->getName();
+        ret = ret + " " + alpha[alpha.size()-1]->getName() + ")";
+        return ret;
+}
+@  
+
+\subsection{Unification}
+\begin{comment}
+We now discuss type unification.
+The type unification algorithm given here is adapted from the one
+given in \cite[Chap.5]{peyton-jones87}.
+\end{comment}
+
+<<unification.h>>=
+#ifndef _UNIFICATION_H_
+#define _UNIFICATION_H_
+
+#include "terms.h"
+#include "types.h"
+#include <vector>
+#include <utility>
+struct term_type { term * first; type * second; };
+extern bool unify(vector<pair<string,type *> > &eqns,type *tvn,type *t);
+extern type * apply_subst(vector<pair<string, type *> > & eqns, type * x);
+extern type * wellTyped(term * t);
+extern pair<type *, vector<term_type> > mywellTyped(term * t);
+extern type * get_type_from_syn(type * in);
+
+#endif
+@ %def term_type
+
+<<unification.cc>>=
+#include <iostream>
+#include <utility>
+#include <vector>
+#include <string>
+#include "types.h"
+#include "unification.h"
+using namespace std;
+
+bool unify_verbose = false; // set this to see the unification process
+<<unification body>>
+<<type checking>>
+@ 
+
+\begin{comment}
+The function \func{getBinding} returns the binding for parameter $x$ in
+a type substitution $\theta$.
+\end{comment}
+
+<<unification body>>=
+type * getBinding(vector<pair<string, type *> > & eqns, type * x) {
+        assert(x->isParameter()); 
+        string vname = x->getName();
+        for (unsigned int i=0; i!=eqns.size(); i++)
+                if (eqns[i].first == vname) return eqns[i].second;
+        return x;
+}
+@ %def getBinding 
+
+\begin{comment}
+Given a type substitution $\theta$ and a type $t$ with parameters, 
+\func{apply\_subst} computes $t\theta$.
+\end{comment}
+
+<<unification body>>=
+type * apply_subst(vector<pair<string, type *> > & eqns, type * t) {
+        if (t->isParameter())
+                return getBinding(eqns, t)->clone();
+        type * ret = t->clone(); 
+        for (int i=0; i!=ret->alphaCount(); i++) {
+                type * temp = apply_subst(eqns, ret->getAlpha(i));
+                delete_type(ret->getAlpha(i));
+                ret->setAlpha(temp, i); 
+        } 
+        return ret;
+}
+@ %def apply_subst 
+
+\begin{comment}
+This function extends a substitution $\theta$ with an additional
+equation $x = t$.
+If $t$ is $x$, then the extension succeeds trivially.
+Otherwise, unless $x$ appears in $t$, the extension succeeds.
+\end{comment}
+
+<<unification body>>=
+bool extend(vector<pair<string, type *> > & eqns, type * x, type * t) {
+        assert(x->isParameter()); 
+        <<delete eqns of the form x = x>>
+        <<if x appears in t, return false>>
+        <<apply (x,t) to each eqn in eqns, extend eqns and return true>>
+}
+@ %def extend 
+
+<<delete eqns of the form x = x>>=
+if (t->isParameter())
+        if (x->getName() == t->getName()) return true;
+@ 
+
+<<if x appears in t, return false>>=
+// case of t not a parameter
+set<string> parameters; 
+t->getParameters(parameters);
+// set<string>::iterator p = parameters.begin();
+// cout << "parameters : ";
+// while (p != parameters.end()) { cout << *p << " "; p++; }
+if (parameters.find(x->getName()) != parameters.end())
+        return false;
+@ 
+
+<<apply (x,t) to each eqn in eqns, extend eqns and return true>>=
+for (unsigned int i=0; i!=eqns.size(); i++) {
+        type * temp = eqns[i].second;
+        eqns[i].second = apply_subst(eqns, temp);
+        delete_type(temp);
+} 
+pair<string, type *> eqn(x->getName(), t->clone()); 
+eqns.push_back(eqn);
+return true;
+@ 
+
+\begin{comment}
+This function extracts the actual type of a synonym.
+We may need to go through several redirections to get to the actual type.
+\end{comment}
+
+<<unification body>>=
+type * get_type_from_syn(type * in) {
+        type * ret = in; 
+        while (ret->isSynonym()) 
+                ret = dcast<type_synonym *>(ret)->getActual();
+        return ret;
+}
+@ %def get_type_from_syn
+
+\begin{comment}
+This function returns whether two types \dstruct{tvn} and \dstruct{t} 
+are unifiable.
+If one of the two, say \dstruct{tvn}, is a parameter, we will try 
+extending \dstruct{eqns} with the equation (\dstruct{tvn} $ = $ \dstruct{t}).
+Otherwise, we compare the tags and try to recursively unify the subtypes
+if the tags match.
+\end{comment}
+
+<<unification body>>=
+bool unify(vector<pair<string,type *> > &eqns, type * tvn, type * t) {
+	<<unify::verbose 1>>
+        if (tvn->isSynonym()) tvn = get_type_from_syn(tvn);
+        if (t->isSynonym()) t = get_type_from_syn(t);
+	<<unify::verbose 2>>
+
+        bool ret = false;
+        if (tvn->isParameter()) {
+                type * phitvn = getBinding(eqns, tvn)->clone();
+
+                type * phit = apply_subst(eqns, t); 
+                // if phitvn == tvn
+                if (phitvn->isParameter()) {
+                        if (tvn->getName() == phitvn->getName()) {
+                                ret = extend(eqns, tvn, phit);
+                                delete_type(phit); delete_type(phitvn);
+				if (unify_verbose) cerr << ret << endl;
+                                return ret;
+                        }
+                } else { 
+                        ret = unify(eqns, phitvn, phit);
+                        delete_type(phit); delete_type(phitvn);
+			if (unify_verbose) cerr << ret << endl;
+                        return ret; 
+                }
+        }
+        // switch place
+        if (tvn->isParameter() == false && t->isParameter()) 
+                return unify(eqns, t, tvn);
+
+        <<unify::case of both non-parameters>>
+        return true;
+}
+@ %def unify 
+
+<<unify::case of both non-parameters>>=
+if (tvn->isParameter() == false && t->isParameter() == false) {
+        if (tvn->getTag() != t->getTag()) return false;
+        if (tvn->getTag() == Tuple && t->getTag() == Tuple)
+                if (tvn->alphaCount() != t->alphaCount()) {
+			if (unify_verbose) cerr << false << endl;
+                        return false; 
+		}
+        // unify each component
+        if (tvn->alphaCount() != t->alphaCount()) {
+		cerr << "Error in unification. Argument counts don't match.\n";
+		cerr << "tvn = " << tvn->getName() << endl;
+		cerr << "  t = " << t->getName() << endl;
+		assert(false);
+	}
+        for (int i=0; i!=tvn->alphaCount(); i++) {
+                bool r = unify(eqns,tvn->getAlpha(i),t->getAlpha(i));
+                if (r == false) return false;
+        }
+}
+@ 
+
+\begin{comment}
+We print out some information to help debugging.
+\end{comment}
+
+<<unify::verbose 1>>=
+if (unify_verbose) 
+	cerr << "Unifying " << tvn->getName() << " and " << t->getName() <<endl;
+@ 
+
+<<unify::verbose 2>>=
+if (unify_verbose) cerr << "After transformation:\n";
+<<unify::verbose 1>>
+@ 
+
+\subsection{Type Checking}
+\begin{comment}
+The type-checking procedure implements the following algorithm.
+For more details on type checking and type inference, see, for example, 
+\cite[Chap. 11]{jmitchell96foundations}.
+\begin{align*}
+\hspace*{-1em}\it{WT}(C) &= \alpha \;\;\; \text{where $\alpha$ is the declared 
+                                  signature of $C$} \\
+\hspace*{-1em}\it{WT}(x) &= \begin{cases}
+               \alpha \;\;\;\text{ if $\it{WT}(x) = \alpha$ has been
+		 established before;} \\
+               a \;\;\;\; \text{ otherwise; here, $a$ is a fresh parameter.} \\
+               \end{cases}\\
+\hspace*{-1em}\it{WT}((t_1,\ldots,t_n)) &= \it{WT}(t_1) \times \cdots \times \it{WT}(t_n)\\
+\hspace*{-1em}\it{WT}(\lambda x.t) &= 
+        \begin{cases}
+         \alpha \rightarrow \beta \;\;\;\text{ if $\it{WT}(t) = \beta$ 
+           and $x$ is free with relative type $\alpha$ in $t$.} \\
+         a \rightarrow \beta \;\;\;\text{ where $a$ is a parameter otherwise.}\\
+         \end{cases} \\
+\hspace*{-1em}\it{WT}((s\,t)) &= 
+       \beta\theta \;\;\;\text{ if $\it{WT}(s) = \alpha \rightarrow \beta$, 
+           $\it{WT}(t) = \gamma$, and
+           $\alpha$ and $\gamma$ are unifiable using $\theta$.}
+\end{align*}
+The input term is not well-typed if any one of the $\it{WT}$ calls on
+its subterms fails.
+\end{comment}
+
+<<type checking actual>>=
+type * wellTyped2(term * t, vector<var_name> bvars, int scope) {
+	type * ret = NULL;
+	<<wellTyped2::case of t a constant>>
+	<<wellTyped2::case of t a variable>>
+	<<wellTyped2::case of t an application>>
+        <<wellTyped2::case of t an abstraction>>
+	<<wellTyped2::case of t a modal term>>
+        <<wellTyped2::case of t a tuple>>
+	return ret;
+}
+@ %def wellTyped2
+
+\begin{comment}
+We first look at some data structures.
+The vector \dstruct{term\_types} is used to store the inferred type
+for each subterm of the input term.
+The structure \dstruct{var\_name} is used to handle variables; see
+Comment \ref{com:type checking:variable} for more details.
+\end{comment}
+
+<<type checking variables>>=
+vector<term_type> term_types;
+struct var_name { int vname; string pname; };
+@ 
+
+\begin{comment}
+If the input term $t$ is a constant, we find its signature $\alpha$
+from the global constants repository (the function \func{get\_signature} 
+will halt with an error if $t$ is unknown), rename all the parameters
+in $\alpha$ to obtain $\alpha'$ and then return $\alpha'$.
+We need to rename parameters because some of the parameters in
+$\alpha$ may have been introduced (and constrained) up to this point
+in the type checking process.
+To illustrate, consider the following type declarations.
+\begin{gather*}
+\it{top} : a \rightarrow \varOmega \\
+\it{ind} : a \rightarrow \varOmega
+\end{gather*}
+The term $(\it{top}\,\it{ind})$ is clearly well-typed.
+But the type checking procedure will fail if we do not first rename,
+say, the first parameter $a$ because the unification procedure will
+fail when attempting to equate $a$ and $a \rightarrow \varOmega$.
+\end{comment}
+
+<<wellTyped2::case of t a constant>>=
+if (t->isF() || t->isD()) {
+	if (t->isint) ret = new type(gInt);
+	else if (t->isfloat) ret = new type(gFloat);
+	else if (t->isChar()) ret = new type(gChar);
+	else if (t->isString()) ret = new type(gString);
+	else {  
+		ret = get_signature(t->cname);
+		if (ret) { ret = ret->clone(); ret->renameParameters(); }
+		else return NULL;
+	}
+	<<wellTyped2::save n return>>
+}
+@ 
+
+\begin{comment}
+Each subterm is stored in \dstruct{term\_types} the moment its
+type is inferred.
+These entries may be updated later on when parameters get instantiated
+further. 
+See Comment \ref{com:type checking:application}. 
+\end{comment}
+
+<<wellTyped2::save n return>>=
+term_type res; res.first = t; res.second = ret; 
+term_types.push_back(res);
+if (t->ptype) delete_type(t->ptype);
+t->ptype = ret->clone();
+return ret;
+@ 
+
+\begin{comment}\label{com:type checking:variable}
+To determine the type of a variable $x$, we need to know two things:
+\begin{enumerate}\itemsep0mm\parskip0mm
+ \item Is it a bound or a free variable?
+ \item Has it occurred before?
+\end{enumerate}
+If $x$ is a bound variable that has occurred previously, we just
+recycle the previously computed type.
+Else if $x$ is a bound variable that has not occurred previously, we
+use the parameter name that has been assigned earlier to create a new 
+parameter. 
+(See Comment \ref{com:type checking:abstraction}.)
+Otherwise, if $x$ is free, we check (in \dstruct{term\_types}) to see
+whether a type for $x$ has been inferred earlier. 
+If so, we return the inferred type.
+Otherwise, we create a new parameter with a new parameter name.
+\end{comment}
+
+<<wellTyped2::case of t a variable>>=
+if (t->isVar()) {
+	if (t->cname == iWildcard) {
+		ret = new type_parameter();
+		<<wellTyped2::save n return>>
+	}
+	unint start = 0;
+	for (int i=(int)bvars.size()-1; i!=-1; i--) 
+		if (t->cname == bvars[i].vname) {
+			start = scope;
+			<<variable case::lookup previous occurrence>>
+			ret = new type_parameter(bvars[i].pname);
+			<<wellTyped2::save n return>>
+		}
+	<<variable case::lookup previous occurrence>> 
+	ret = new type_parameter();
+	<<wellTyped2::save n return>>
+}
+if (t->tag == SV) {
+	for (unint j=0; j!=term_types.size(); j++) 
+		if (term_types[j].first->tag == SV) {
+			if (t->cname == term_types[j].first->cname) {
+				ret = term_types[j].second->clone();
+				<<wellTyped2::save n return>>
+			}
+		}
+	ret = new type_parameter();
+	<<wellTyped2::save n return>>
+}
+@ 
+
+<<variable case::lookup previous occurrence>>=
+for (unint j=start; j!=term_types.size(); j++) 
+	if (term_types[j].first->isVar()) 
+		if (t->cname == term_types[j].first->cname) {
+			ret = term_types[j].second->clone();
+			<<wellTyped2::save n return>>
+		}
+@ 
+
+\begin{comment}\label{com:type checking:application}
+If the input term is an application of the form $(s\,t)$, we first
+infer the types of $s$ and $t$ separately.
+Assuming the type of $s$ has the form $\alpha \rightarrow \beta$, we
+then attempt to unify $\alpha$ with $\gamma$, the type of $t$.
+If there exists a $\theta$ that unifies the two, we can then return 
+$\beta\theta$ as the type for $(s\,t)$.
+We also update entries in \dstruct{term\_types} with $\theta$ to
+reflect new knowledge.
+The variable \dstruct{vlength} keeps track of the part of
+\dstruct{term\_types} we can safely change.
+\end{comment}
+
+<<wellTyped2::case of t an application>>=
+if (t->isApp()) {
+	unsigned int vlength = term_types.size();
+	type * t1 = wellTyped2(t->lc(), bvars, scope); 
+	if (t1->isSynonym()) t1 = get_type_from_syn(t1);
+	<<wellTyped2::application::t1 should have right form>>
+	type * t2 = wellTyped2(t->rc(), bvars, scope);
+	if (!t2) { printErrorMsg(t->rc()); return NULL; }
+
+	vector<pair<string, type *> > slns; 
+	bool result = unify(slns, t1->getAlpha(0), t2);
+	if (!result) { <<wellTyped2::application::error reporting2>> }
+	ret = apply_subst(slns, t1->getAlpha(1));
+
+	for (unint i=vlength; i!=term_types.size(); i++) {
+		type * temp = term_types[i].second;
+		term_types[i].second = apply_subst(slns, temp);
+		delete_type(temp);
+	}
+	for (unint j=0; j!=slns.size(); j++) delete_type(slns[j].second);
+	slns.clear();
+	<<wellTyped2::save n return>>
+}
+@ 
+
+\begin{comment}
+The type \dstruct{t1} should be a function type.
+If this is not the case but \dstruct{t1} is a parameter, we can rescue
+the situation by making \dstruct{t1} a type of the form $a \rightarrow
+b$, where both $a$ and $b$ are parameters.
+(This is equivalent to saying that $s$ has type $c$, and that 
+$c = a \rightarrow b$.)
+If \dstruct{t1} is not a parameter and not a function type, we have
+a typing error.
+\end{comment}
+
+<<wellTyped2::application::t1 should have right form>>=
+if (!t1) { printErrorMsg(t->lc()); return NULL; }
+
+if (!t1->isAbstract() && t1->isParameter()) {
+	type * temp = t1;
+	t1 = new type_abs(temp, new type_parameter());
+	term_types[term_types.size()-1].second = t1;
+}
+if (!t1->isAbstract()) {
+	int osel = getSelector();
+	setSelector(STDERR); ioprint("*** Error: "); 
+	t->lc()->print(); ioprint(" : "); ioprintln(t1->getName());
+	ioprintln(" does not have function type.");
+	setSelector(osel);
+	return NULL;
+}
+@ 
+
+\begin{comment}
+Given $s : \alpha \rightarrow \beta$ and $t : \gamma$, the term
+$(s\,t)$ is not well typed if we cannot unify $\alpha$ and $\gamma$.
+\end{comment}
+
+<<wellTyped2::application::error reporting2>>=
+int osel = getSelector();
+setSelector(STDERR); t->print(); ioprintln(" is not well typed.");
+ioprint(t1->getAlpha(0)->getName()); ioprint(" and ");
+ioprint(t2->getName()); ioprintln(" are not unifiable\n");
+slns.clear();
+unify_verbose = true;
+unify(slns, t1->getAlpha(0), t2);
+setSelector(osel); unify_verbose = false;
+return NULL;
+@ 
+
+\begin{comment}\label{com:type checking:abstraction}
+Given a lambda term $\lambda x.t$, the variable $x$ is given a
+new parameter name (stored in \dstruct{bvars}), and every occurrence
+of $x$ in $t$ will use the same parameter name afterwards.
+
+The type checking procedure is simple.
+We first check the type of $t$.
+Then we find the relative type of $x$ in $t$ (recorded in
+\dstruct{term\_types}).
+If $t$ does not contain $x$, then we just use the initially assigned
+parameter name to create a new parameter.
+If $x$ has type $\alpha$ and $t$ has type $\beta$, we return $\alpha
+\rightarrow \beta$.
+\end{comment}
+
+<<wellTyped2::case of t an abstraction>>=
+if (t->isAbs()) {
+	unint vlength = term_types.size();
+
+	var_name tmp; tmp.vname = t->fields[0]->cname; 
+	tmp.pname = newParameterName();
+	bvars.push_back(tmp);
+
+	type * t2 = wellTyped2(t->fields[1], bvars, vlength); 
+	if (!t2) { printErrorMsg(t); return NULL; }
+
+	type * vt = NULL;
+	for (unint i=vlength; i!=term_types.size(); i++) 
+		if (term_types[i].first->isVar(t->fields[0]->cname)) 
+		      {	vt = term_types[i].second->clone(); break; }
+	if (vt == NULL) { vt = new type_parameter(tmp.pname); } 
+
+	ret = new type_abs(vt, t2->clone()); 
+	<<wellTyped2::save n return>>
+}
+@
+
+\begin{comment}
+We now look at modal terms.
+Given $\square_i t$, if we can infer $t$ has type $\alpha$, then we can 
+infer $\square_i t$ has type $\alpha$.
+\end{comment}
+
+<<wellTyped2::case of t a modal term>>=
+if (t->isModal()) {
+        type * ret = wellTyped2(t->fields[0], bvars, scope);
+	if (!ret) { printErrorMsg(t); return NULL; }
+	ret = ret->clone();
+        <<wellTyped2::save n return>>
+}
+@ 
+
+\begin{comment}
+The case for tuples is easy.
+We just infer the types of each component and then put them together.
+\end{comment}
+
+<<wellTyped2::case of t a tuple>>=
+if (t->isProd()) {
+	ret = new type_tuple; 
+	for (unsigned int i=0; i!=t->fieldsize; i++) {
+		type * ti = wellTyped2(t->fields[i], bvars, scope);
+		if (!ti) { printErrorMsg(t); return NULL; }
+		ret->addAlpha(ti->clone());
+	}
+	<<wellTyped2::save n return>>
+}
+@ 
+
+<<type checking subsidiary functions>>=
+void printErrorMsg(term * t) {
+	int osel = getSelector();
+	setSelector(STDERR); t->print(); 
+	ioprintln(" is not well typed."); setSelector(osel);
+}
+@ %def printErrorMsg
+
+\begin{comment}
+This is a function written for debugging purposes.
+It prints out the contents of \dstruct{term\_types}.
+\end{comment}
+
+<<type checking subsidiary functions>>=
+void print_term_types() {
+	int osel = getSelector(); setSelector(STDOUT);
+	ioprintln(" *** ");
+	for (unint i=0; i!=term_types.size(); i++) {
+		term_types[i].first->print();
+		ioprint(" : "); ioprintln(term_types[i].second->getName());
+	}
+	setSelector(osel);
+}
+@ 
+
+\begin{comment}
+We need to free up the memory occupied by the intermediate types
+inferred for the subterms.
+\end{comment}
+
+<<type checking subsidiary functions>>=
+void cleanup_term_types() {
+	// print_term_types();
+	for (unint i=0; i!=term_types.size(); i++)
+		delete_type(term_types[i].second);
+	term_types.clear();
+}
+@ %def cleanup_term_types
+
+\begin{comment}
+The function \func{wellTyped} is a wrapper around the actual 
+type-checking procedure \func{wellTyped2}.
+\end{comment}
+
+<<type checking>>=
+#include <string>
+#include <vector>
+#include "global.h"
+#include "terms.h"
+
+<<type checking variables>>
+<<type checking subsidiary functions>>
+<<type checking actual>>
+
+type * wellTyped(term * t) {
+	vector<var_name> bvars;
+	type * ret = wellTyped2(t, bvars, 0);
+	if (!ret) { printErrorMsg(t); return NULL; }
+	ret = ret->clone();
+	cleanup_term_types();
+	return ret;
+}
+@ %def wellTyped
+
+\begin{comment}
+The following is a version of {\tt wellTyped} that returns both the
+type of the term being checked and the type of each subterm computed.
+The latter is needed for checking {\tt typeof} side conditions on
+statements. 
+\end{comment}
+
+<<type checking>>=
+pair<type *, vector<term_type> > mywellTyped(term * t) {
+	pair<type *, vector<term_type> > res;
+	vector<var_name> bvars;
+	type * ret = wellTyped2(t, bvars, 0);
+	if (!ret) { printErrorMsg(t); res.first = NULL; return res; }
+	ret = ret->clone();
+	res.first = ret; res.second = term_types;
+	term_types.clear();
+	return res;
+}
+@ %def mywellTyped
+
+

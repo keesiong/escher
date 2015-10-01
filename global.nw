@@ -1,0 +1,1274 @@
+% -*- mode: Noweb; noweb-code-mode: c++-mode; c-basic-offset: 8; -*-
+
+<<global.h>>=
+#ifndef _ESCHER_GLOBAL_H_
+#define _ESCHER_GLOBAL_H_
+
+#include <algorithm>
+#include <vector>
+#include <string>
+#include <set>
+#include <math.h>
+#include <stdlib.h>
+#include "terms.h"
+#include "types.h"
+#include "unification.h"
+using namespace std;
+
+<<global:data types>>
+<<global:external variables>>
+<<global:external functions>>
+
+// extern vector<vector<term_type> > stat_term_types;
+extern set<int> cacheFuncs;
+extern set<int> strings;
+extern const string pve;
+
+<<global symbol constants>>
+
+#define UDEFINED 0
+#define SYNONYM  1
+
+#endif
+@
+
+\begin{comment}
+The variable {\tt ltime} records the total number of computation steps
+taken to simplify the query.
+The variable {\tt cltime} records the total number of steps computed
+using cached information.
+Statements in the input Escher program are stored in a vector.
+Each statement is stored in a structure called {\tt statementType}.
+The fields {\tt numargs} and {\tt anchor} are used to pick out
+unsuitable statements during pattern matching.
+% (See Comment \ref{com:filter out unsuitable statements} for more details.) 
+\end{comment}
+
+<<global:data types>>=
+// these are the escher statements
+struct statementType {
+	vector<int> modalContext; // this is used in Bach only
+	vector<int> quantifiedVars; // this is used in Bach only
+        term * stmt;
+        int numargs;
+        int anchor;
+	bool typechecked;
+	bool lastresort;
+	bool eager;
+	bool persistent;
+	bool noredex;
+	bool collectstats; int usestats;
+	statementType * next;
+	statementType() { 
+		anchor = -5; typechecked = false; lastresort = false; 
+		eager = false; persistent = false; noredex = false;
+		collectstats = false; usestats = 0;
+		next = NULL;
+	}
+	void freememory() { stmt->freememory(); }
+	void print() { stmt->print(); ioprintln(); if (next) next->print(); }
+};
+extern vector<statementType *> grouped_statements;
+extern vector<statementType *> statements;
+extern vector<statementType *> cachedStatements;
+@ 
+
+<<global:data types>>=
+struct formulaType {
+	term * fml;
+	bool globalass;
+	bool typechecked;
+	formulaType() { globalass = false; typechecked = false; }
+	void freememory() { fml->freememory(); }
+};
+extern vector<formulaType> formulas;
+@ 
+
+\begin{comment}
+The following is the data structure for storing edits.
+\end{comment}
+
+<<global:data types>>=
+struct BN_node { 
+	int vname; term * density; BN_node * next; 
+	BN_node() { density = NULL; next = NULL; }
+	BN_node * clone() { <<BN node:clone>> }
+	void freememory() { 
+		if (density) density->freememory(); 
+		if (next) next->freememory(); }
+	void print() { <<BN node:print>> }
+	void subst(vector<substitution> & theta) {
+		density->subst(theta); if (next) next->subst(theta); }
+};
+@ %def BN_node 
+
+<<global:data types>>=
+struct editType {
+	term * head; 
+	term * body;
+	type * htype;
+	string htype_name;
+	BN_node * bnodes;
+	editType * next;
+	editType() { head = NULL; body = NULL; bnodes = NULL; next = NULL; }
+	editType * clone() { <<editType:clone>> }
+	void freememory() { <<editType:freememory>> }
+	void subst(vector<substitution> & theta) { <<editType:subst>> }
+	void print() { <<editType:print>> }
+};
+extern vector<editType *> edits;
+@ %def editType
+
+\begin{comment}
+We do the appropriate term substitutions on the parts of the conditional edit,
+taking care that the domain of the input substitution does not overlap the 
+variables defined in the bayes net.
+\end{comment}
+
+<<editType:subst>>=
+// make sure theta does not bound variables in bnodes
+for (unint i=0; i!=theta.size(); i++) {
+	BN_node * pt = bnodes;
+	while (pt!=NULL) { assert(theta[i].first != pt->vname); pt = pt->next; }
+}
+// do the substitution
+body->subst(theta); 
+if (bnodes) bnodes->subst(theta);
+if (next) next->subst(theta);
+@ 
+
+
+\begin{comment}
+Following are print routines for the two data structures above.
+\end{comment}
+
+<<BN node:print>>=
+ioprint(getString(vname)); ioprint(" ~ "); density->print();
+if (next != NULL) { ioprint(", "); next->print(); }
+@ 
+
+<<editType:print>>=
+head->print(); ioprint(" ~> "); body->print(); 
+if (bnodes != NULL) { ioprint(" ["); bnodes->print(); ioprint(" ]"); }
+ioprint(" of type "); ioprint(htype->getName()); ioprint("\n");
+if (next) next->print();
+@ 
+
+<<BN node:clone>>=
+BN_node * ret = new BN_node;
+ret->vname = vname; ret->density = density->clone();
+if (next) ret->next = next->clone();
+return ret;
+@ 
+
+\begin{comment}
+In cloning an {\tt editType}, we always have to work out the free variables 
+because this calculation is relied upon by the pattern-matching routine.
+\end{comment}
+
+<<editType:clone>>=
+editType * ret = new editType;
+ret->head = head->clone(); ret->body = body->clone();
+ret->head->labelStaticBoundVars(); ret->body->labelStaticBoundVars(); 
+ret->htype = htype->clone(); 
+if (bnodes) ret->bnodes = bnodes->clone();
+if (next) ret->next = next->clone();
+return ret;
+@ 
+
+<<editType:freememory>>=
+if (head) head->freememory();
+if (body) body->freememory();
+if (htype) delete_type(htype);
+if (bnodes) bnodes->freememory();
+if (next) next->freememory();
+@ 
+
+\begin{comment}
+This is a data structure for storing conditional edit grammars.
+\end{comment}
+
+<<global:data types>>=
+struct CEG_node {
+	term * cond;
+	editType * editg;
+	CEG_node * lt, * rt;
+	CEG_node() { cond = NULL; editg = NULL; lt = NULL; rt = NULL; }
+	CEG_node * clone() {
+		CEG_node * ret = new CEG_node;
+		if (cond != NULL) ret->cond = cond->clone();
+		if (editg != NULL) ret->editg = editg->clone();
+		if (lt != NULL) { ret->lt = lt->clone(); ret->rt = rt->clone();}
+		return ret;
+	}
+	void freememory() {
+		if (cond) cond->freememory();
+		if (editg) editg->freememory();
+		if (lt) lt->freememory();
+		if (rt) rt->freememory();
+	}
+	void print() {
+		setSelector(STDERR);
+		if (cond) {
+			ioprint("if "); cond->print(); ioprint(" then \n");
+			lt->print(); ioprint("\n");
+			ioprint("else\n");
+			rt->print(); ioprint("\n");
+		} else editg->print();
+	}
+};
+extern CEG_node * condEditG;
+extern CEG_node * instEditG;
+@ 
+
+<<global.cc>>=
+#include "global.h"
+#include <stdlib.h>
+#include <cassert>
+using namespace std;
+
+vector<statementType *> grouped_statements;
+vector<statementType *> statements;
+// vector<vector<term_type> > stat_term_types;
+vector<formulaType> formulas;
+vector<statementType *> cachedStatements;
+vector<editType *> edits;
+CEG_node * condEditG = NULL, * instEditG = NULL;
+set<int> cacheFuncs;
+set<int> strings; // used to record strings in Bach programs
+
+<<run-time options>>
+<<string constants>>
+
+<<symbols and their integer representations>>
+<<statements and type checking>>
+<<constants and their signatures>>
+<<function symbol table>>
+<<nonrigid constants>>
+<<type name to type objects mapping>>
+<<statements insertion and printing>>
+<<misc functions>>
+
+@
+
+\begin{comment}
+These are variables that record the run-time options specified by the user.
+\end{comment}
+
+<<run-time options>>=
+int ltime = 0; int cltime = 0;
+int verbose = 0; bool typecheck = true; bool optimise = false;
+bool backchain = false; bool outermost = false; bool externalIO = false;
+FILE * logcache = NULL;
+bool interrupted = false;
+bool stepByStep = false;
+vector<int> queryModalContext;
+@ 
+
+<<global:external variables>>=
+extern int ltime; extern int cltime;
+/* options */
+extern int verbose; extern bool typecheck; 
+extern bool optimise; extern bool backchain; extern bool outermost;
+extern bool externalIO;
+extern vector<int> queryModalContext;
+
+extern bool interrupted; 
+extern bool stepByStep;
+/* log files */
+extern FILE * logcache;
+@ 
+
+\begin{comment}
+Strings for the type system.
+\end{comment}
+
+<<string constants>>=
+const string underscore = "_";
+const string alpha = "alpha";
+const string Parameter = "Parameter";
+const string Tuple = "Tuple";
+const string Arrow = "Arrow";
+const string gBool = "Bool", gChar = "Char", gString = "String";
+const string gInt = "Int", gFloat = "Float";
+const string pve = "pve";
+@ 
+
+\begin{comment}
+Output strings for system-level equational simplification routines. 
+\end{comment}
+
+<<string constants>>=
+const string eqsimpl = "Equalities simplification\n";
+const string andsimpl = "And rule simplification\n";
+const string and2simpl = "And2 rule simplification\n";
+const string ineqsimpl = "Inequalities simplification\n";
+const string arsimpl = "Arithmetic simplification\n";
+const string exsimpl = "Existential rule simplification\n";
+const string uvsimpl = "Universal rule simplification\n";
+const string betasimpl = "Beta reduction\n";
+const string mathsimpl = "Math library function call\n";
+const string itesimpl = "If-then-else rule simplification\n";
+const string modalsimpl = "Modal term simplification\n";
+@ 
+
+<<global:external variables>>=
+extern const string eqsimpl, andsimpl, and2simpl, ineqsimpl, arsimpl,
+	exsimpl, uvsimpl, betasimpl, mathsimpl, itesimpl, modalsimpl;
+@ 
+
+\begin{comment}
+Output strings for tableaux rules in the theorem prover.
+\end{comment}
+
+<<string constants>>=
+const string substitutionRuleId = "=";
+const string negationRuleId = "~~";
+const string conjunctionRuleId = "&";
+const string disjunctionRuleId = "v";
+const string reflexiveRuleId = "Id";
+const string existentialRuleId = "E";
+const string universalRuleId = "U";
+const string universalSPImpliesRuleId = "USI";
+const string bachRuleId = "Bc";
+const string closureRuleId = "C";
+const string uclosureRuleId = "UI";
+const string diamondRuleId = "<>";
+const string boxRuleId = "[]";
+const string kRuleId = "K";
+@ 
+
+<<global:external variables>>=
+extern const string substitutionRuleId, negationRuleId, conjunctionRuleId,
+	disjunctionRuleId, reflexiveRuleId, kRuleId,
+	existentialRuleId, universalRuleId, universalSPImpliesRuleId, 
+	bachRuleId, closureRuleId, uclosureRuleId, diamondRuleId, boxRuleId;
+@ 
+
+\begin{comment}\label{com:symbols and integers}
+For efficiency reasons, we do not want to deal with the string representations
+of symbols in the system.
+Each symbol is mapped to an integer, and the mappings are recorded here.
+\end{comment}
+
+<<symbols and their integer representations>>=
+const int iNot = 1001;        const string gNot = "not";
+const int iAnd = iNot + 1;    const string gAnd = "&&";
+const int iOr = iAnd + 1;     const string gOr = "||";
+const int iImplies = iOr + 1; const string gImplies = "implies";
+const int iIff = iImplies +1; const string gIff = "iff";
+const int iPi = iIff + 1;     const string gPi = "pi";
+const int iSigma = iPi + 1;   const string gSigma = "sigma";
+const int iEqual = iSigma +1; const string gEqual = "=";
+const int iIte = iEqual + 1;  const string gIte = "ite";
+const int iTrue = iIte + 1;   const string gTrue = "True";
+const int iFalse = iTrue + 1; const string gFalse = "False";
+const int iHash = iFalse + 1; const string gHash = "#";
+const int iEmptyList = iHash + 1;  const string gEmptyList = "[]";
+const int iInfinity = iEmptyList + 1; const string gInfinity = "Infinity";
+const int iAdd = iInfinity + 1;   const string gAdd = "add";
+const int iSub = iAdd + 1;    const string gSub = "sub";
+const int iMax = iSub + 1;    const string gMax = "max";
+const int iMin = iMax + 1;    const string gMin = "min";
+const int iMul = iMin + 1;    const string gMul = "mul";
+const int iDiv = iMul + 1;    const string gDiv = "div";
+const int iMod = iDiv + 1;    const string gMod = "mod";
+const int iAtan2 = iMod + 1;  const string gAtan2 = "atan2";
+const int iLT = iAtan2 + 1;   const string gLT = "<";
+const int iLTE = iLT + 1;     const string gLTE = "<=";
+const int iGT = iLTE + 1;     const string gGT = ">";
+const int iGTE = iGT + 1;     const string gGTE = ">=";
+const int iNEqual = iGTE +1;  const string gNEqual = "/=";
+const int iAssign = iNEqual+1;  const string gAssign = ":=";
+const int iTpHelp = iAssign+1;  const string gTpHelp = "tpHelp";
+const int iTpTag = iTpHelp +1;  const string gTpTag = "TpTag";
+const int iSucceeded = iTpTag+1; const string gSucceeded = "Succeeded";
+const int iFailed = iSucceeded+1;  const string gFailed = "Failed";
+const int iDontKnow = iFailed+1;   const string gDontKnow = "DontKnow";
+const int iSin = iDontKnow+1; const string gSin = "sin";
+const int iCos = iSin + 1;    const string gCos = "cos";
+const int iSqrt = iCos + 1;   const string gSqrt = "sqrt";
+const int iExp = iSqrt + 1;   const string gExp = "exp";
+const int iUniform = iExp + 1; const string gUniform = "uniform";
+const int iCategorical = iUniform+1; const string gCategorical = "categorical";
+const int iGaussian = iCategorical + 1; const string gGaussian = "gaussian";
+const int iPoint = iGaussian + 1; const string gPoint = "point";
+const int iDGaussian = iPoint + 1; const string gDGaussian = "dgaussian";
+const int iWildcard = iDGaussian + 1; const string gWildcard = "_";
+@ %def  iWildcard iNot  iAnd  iOr  iImplies  iIff  iPi  iSigma  iEqual  iIte  iTrue  iFalse  iHash  iEmptyList iInfinity iAdd  iSub  iMax  iMin  iMul  iDiv  iMod  iSin iCos iSqrt iExp iAtan2 iUniform iCategorical iGaussian iDGaussian iPoint iLT  iLTE  iGT iGTE  iNEqual  iAssign  iTpHelp  iTpTag  iSucceeded  iFailed  iDontKnow
+
+<<symbols and their integer representations>>=
+vector<string> symbolsMap;
+vector<string> charsMap; // characters are encoded using numbers in the range
+                         // [2000,2999]
+int insert_symbol(const string & symbol) {
+	if (symbol[0] == '\'') {
+		for (unint i=0; i!=charsMap.size(); i++) 
+			if (charsMap[i] == symbol) return 2000+i;
+		charsMap.push_back(symbol); 
+		int csize = charsMap.size(); assert(csize <= 1000);
+		return 2000+csize-1;
+	}
+	for (unint i=0; i!=symbolsMap.size(); i++) 
+		if (symbolsMap[i] == symbol) return i+1;
+	symbolsMap.push_back(symbol); 
+	int csize = symbolsMap.size(); assert(csize < 1000);
+	return csize;
+}
+@ %def insert_symbol
+
+\begin{comment}
+The next function returns the string encoded by the input integer.
+\end{comment}
+
+<<symbols and their integer representations>>=
+const string gError = "Error";
+const string & getString(int code) {
+	if (0 < code && code <= (int)symbolsMap.size()) 
+		return symbolsMap[code-1];
+	if (2000 <= code && code < 2000+(int)charsMap.size()) 
+		return charsMap[code-2000];
+	switch (code) {
+	case iNot: return gNot; case iAnd: return gAnd;
+	case iOr: return gOr;   case iImplies: return gImplies;
+	case iIff: return gIff; case iPi: return gPi;
+	case iSigma: return gSigma; case iEqual: return gEqual;
+	case iIte: return gIte;     case iTrue: return gTrue;
+	case iFalse: return gFalse; case iHash: return gHash;
+	case iEmptyList: return gEmptyList; 
+	case iInfinity: return gInfinity;
+	case iAdd: return gAdd;
+	case iSub: return gSub; case iMax: return gMax;
+	case iMin: return gMin; case iMul: return gMul;
+	case iDiv: return gDiv; case iMod: return gMod;
+	case iLT: return gLT;   case iLTE: return gLTE;
+	case iGT: return gGT;   case iGTE: return gGTE;
+	case iNEqual: return gNEqual; case iAssign: return gAssign;
+	case iTpHelp: return gTpHelp; case iTpTag: return gTpTag;
+	case iSucceeded: return gSucceeded; case iFailed: return gFailed;
+	case iDontKnow: return gDontKnow;
+	case iSin: return gSin; 
+	case iCos: return gCos;
+	case iSqrt: return gSqrt;
+	case iExp: return gExp;
+	case iAtan2: return gAtan2;
+	case iUniform: return gUniform;
+	case iCategorical: return gCategorical;
+	case iGaussian: return gGaussian;
+	case iDGaussian: return gDGaussian;
+	case iPoint: return gPoint;
+	case iWildcard: return gWildcard;
+	}
+	cerr << "code = " << code << endl; assert(false);
+	return gError;
+}
+@ %def getString 
+
+<<global symbol constants>>=
+extern const int iNot, iAnd, iOr, iImplies, iIff, iPi, iSigma, iEqual, iIte,
+   iTrue, iFalse, iHash, iEmptyList, iInfinity, iAdd, iSub, iMax, iMin, iMul, 
+   iDiv, iMod, iLT, iLTE, iGT, iGTE, iNEqual, iAssign, iTpHelp, iTpTag, 
+   iSucceeded, iFailed, iDontKnow, iSin, iCos, iSqrt, iExp, iAtan2, 
+   iUniform, iCategorical, iGaussian, iDGaussian, iPoint, iWildcard;
+@ 
+
+<<global:external functions>>=
+/* symbol table */
+extern int insert_symbol(const string & symbol);
+extern const string & getString(int code);
+@ 
+
+\begin{comment}
+We now see how variables are handled.
+System-generated variables have integer representations above 5000.
+Standard variables generated by the system are encoded using values in the 
+range 5000 to 99999.
+Fresh variables of this type are obtained using {\tt newPVar()}.
+A variable with code 5013, for example, corresponds to a variable {\tt pve13}.
+Free universal variables generated by the universal rule in the theorem 
+proving part of the system are encoded using values above 100000.
+\end{comment}
+
+<<symbols and their integer representations>>=
+static unsigned int varInt = 5000;
+static unsigned int uvarInt = 100000;
+int newPVar() { assert(varInt < 100000); return varInt++; }
+int newUVar() { return uvarInt++; }
+@ %def newPVar newUVar
+
+\begin{comment}
+Here we just systematically go through the statements and type check
+each one.
+We need to record the inferred type for each subterm of the statement.
+There is a check to make sure that the indices for {\tt statements}
+and {\tt stat\_term\_types} matches; that is, the $i$-th element in
+the latter contains information about the $i$-th element in the
+former.
+\end{comment}
+
+<<statements and type checking>>=
+bool typeCheck() {
+	if (!typecheck) return true;
+	cerr << "Type checking statements...";
+	int size = grouped_statements.size();
+	for (int i=0; i!=size; i++) {
+		if (grouped_statements[i] == NULL) continue;
+		statementType * sts = grouped_statements[i];
+		while (sts != NULL) {
+			if (sts->typechecked) { sts = sts->next; continue; } 
+			type * res = wellTyped(sts->stmt);
+			if (res) { delete_type(res); 
+				   sts->typechecked = true;
+			} else return false;
+			sts = sts->next;
+		}
+	}
+	
+	size = statements.size();
+	for (int i=0; i!=size; i++) {
+		if (statements[i]->typechecked) continue; 
+		type * res = wellTyped(statements[i]->stmt);
+		if (res) { delete_type(res); 
+			   statements[i]->typechecked = true;
+		} else return false;
+	}
+	cerr << "done.\n";
+	// cerr << "Type checking formulas...";
+	size = formulas.size();
+	for (int i=0; i!=size; i++) {
+		if (formulas[i].typechecked) continue;
+		type * res = wellTyped(formulas[i].fml);
+		if (res) { delete_type(res); formulas[i].typechecked = true; }
+		else return false;
+	}
+	// cerr << "done.\n";
+	return true;
+}
+@ %def typeCheck
+
+<<global:external functions>>=
+extern bool typeCheck();
+@ 
+
+\begin{comment}
+Here we release the memory occupied by the statements and the data
+structures supporting side conditions on them.
+We do not have to free the term part of {\tt stat\_term\_types}
+because they point to subterms of terms residing in the 
+{\tt statements} vector.
+\end{comment}
+
+<<statements and type checking>>=
+void cleanup_statements() {
+	cerr << "Cleaning up statements...";
+	for (unint i=0; i!=grouped_statements.size(); i++) {
+		if (grouped_statements[i] == NULL) continue;
+		statementType * sts = grouped_statements[i];
+		while (sts != NULL) {
+			sts->freememory();
+			sts = sts->next;
+		}
+	}
+	for (unint i=0; i!=statements.size(); i++) 
+		statements[i]->freememory();
+	cerr << "Done.\n";
+	cerr << "Cleaning up " << cachedStatements.size() << 
+		" cached statements...";
+	for (unint i=0; i!=cachedStatements.size(); i++)
+		cachedStatements[i]->freememory();
+	cerr << "Done.\n";
+}
+@ %def cleanup_statements 
+
+<<statements and type checking>>=
+void cleanup_formulas() {
+	cerr << "Cleaning up formulas...";
+	for (unint i=0; i!=formulas.size(); i++) formulas[i].freememory();
+	cerr << "Done.\n";
+}
+@ %def cleanup_formulas
+
+%>>
+
+<<global:external functions>>=
+extern void cleanup_statements();
+extern void cleanup_formulas();
+@ 
+
+\begin{comment}
+We now describe a facility that supports the storage and retrieval of
+the declared signatures of constants.
+\end{comment}
+
+<<constants and their signatures>>=
+struct constant_sig { int name; type * signature; };
+vector<constant_sig> constants;
+
+void initialise_constants() {
+	constant_sig temp;
+	temp.name = iTrue; temp.signature = new type(gBool);
+	constants.push_back(temp);
+	temp.name = iFalse; temp.signature = new type(gBool);
+	constants.push_back(temp);	
+	type * a = new type_parameter("a");
+	type * lista = new type_alg("List"); lista->addAlpha(a);
+	temp.name = iEmptyList; temp.signature = lista;
+	constants.push_back(temp);
+	temp.name = iHash; 
+	temp.signature = new type_abs(a->clone(),
+			     new type_abs(lista->clone(), lista->clone()));
+	constants.push_back(temp);
+
+	temp.name = iEqual; 
+	temp.signature = new type_abs(a->clone(),
+				 new type_abs(a->clone(), new type(gBool)));
+	constants.push_back(temp);
+
+	temp.name = iInfinity; temp.signature = new type_parameter("number");
+	constants.push_back(temp);
+
+	temp.name = iUniform; 
+	temp.signature = new type_abs(lista->clone(), 
+				    new type_abs(a->clone(), new type(gFloat)));
+	constants.push_back(temp);
+
+	temp.name = iCategorical;
+	temp.signature = temp.signature->clone();
+	constants.push_back(temp);
+
+	temp.name = iGaussian;
+	temp.signature = new type_abs(new type(gFloat),
+			       new type_abs(new type(gFloat),
+					    new type_abs(new type(gFloat),
+							 new type(gFloat))));
+	constants.push_back(temp);
+
+	temp.name = iDGaussian;
+	temp.signature = new type_abs(new type(gFloat),
+			       new type_abs(new type(gFloat),
+					    new type_abs(new type(gFloat),
+							 new type(gFloat))));
+	constants.push_back(temp);
+
+	temp.name = iPoint;
+	temp.signature = new type_abs(a->clone(), 
+				    new type_abs(a->clone(), new type(gFloat)));
+	constants.push_back(temp);
+
+	<<initialise constants::arithmetic operations>>
+	<<initialise constants::relational operations>>
+	<<initialise constants::disruptive operations>>
+}
+@ %def initialise_constants
+
+<<initialise constants::arithmetic operations>>=
+type * number = new type_parameter("number");
+type * number2 = new type_parameter("number2");
+type * number3 = new type_parameter("number3");
+type * algtype = new type_abs(number, new type_abs(number2,number3));
+temp.name = iAdd; temp.signature = algtype; constants.push_back(temp);
+temp.name = iSub; temp.signature = algtype->clone(); constants.push_back(temp);
+temp.name = iMax; temp.signature = algtype->clone(); constants.push_back(temp);
+temp.name = iMin; temp.signature = algtype->clone(); constants.push_back(temp);
+temp.name = iMul; temp.signature = algtype->clone(); constants.push_back(temp);
+temp.name = iMod; temp.signature = algtype->clone(); constants.push_back(temp);
+temp.name = iDiv; temp.signature = algtype->clone(); constants.push_back(temp);
+temp.name = iAtan2;temp.signature = algtype->clone(); constants.push_back(temp);
+type * tempsig = new type_abs(number2->clone(),number3->clone()) ;
+temp.name = iSin; temp.signature = tempsig; constants.push_back(temp);
+temp.name = iCos; temp.signature = tempsig->clone(); constants.push_back(temp);
+temp.name = iSqrt; temp.signature = tempsig->clone(); constants.push_back(temp);
+temp.name = iExp; temp.signature = tempsig->clone(); constants.push_back(temp);
+@ 
+
+<<initialise constants::relational operations>>=
+type * reltype = new type_abs(number->clone(),
+			      new type_abs(number2->clone(), new type(gBool)));
+temp.name = iGT; temp.signature = reltype; constants.push_back(temp);
+temp.name = iGTE; temp.signature = reltype->clone(); constants.push_back(temp);
+temp.name = iLT; temp.signature = reltype->clone(); constants.push_back(temp);
+temp.name = iLTE; temp.signature = reltype->clone(); constants.push_back(temp);
+@ 
+
+\begin{comment}
+The following constants are for disruptive operations, that is,
+operations that changes persistent objects.
+\end{comment}
+
+<<initialise constants::disruptive operations>>=
+temp.name = iSucceeded; temp.signature = new type("Success");
+constants.push_back(temp);
+temp.name = iFailed; temp.signature = new type("Success");
+constants.push_back(temp);
+temp.name = iAssign; 
+temp.signature = new type_abs(a->clone(),
+			new type_abs(a->clone(), new type("Success")));
+constants.push_back(temp);
+@ 
+
+<<constants and their signatures>>=
+void insert_constant(int name, type * sig) {
+	assert(name > 0);
+	for (unint i=0; i!=constants.size(); i++) 
+		if (constants[i].name == name) 
+			{ <<insert constant:error message>> return; }
+
+	constant_sig temp; temp.name = name; temp.signature = sig;
+	constants.push_back(temp);
+}
+@ %def insert_constant
+
+<<insert constant:error message>>=
+int osel = getSelector(); setSelector(STDERR);
+cerr << "The constant "<< getString(name) << 
+	" has been defined before with type " << 
+	constants[i].signature->getName() << ".\nInstruction ignored.\n"; 
+setSelector(osel);
+@ 
+
+<<constants and their signatures>>=
+type * get_signature(int name) {
+	for (unint i=0; i!=constants.size(); i++)
+		if (constants[i].name == name) return constants[i].signature;
+	cerr << "Unknown constant: " << getString(name) << endl;
+	// assert(false);
+	return NULL;
+}
+@ %def get_signature
+
+<<constants and their signatures>>=
+void cleanup_constants() {
+	cerr << "Cleaning up constants...";
+	for (unint i=0; i!=constants.size(); i++) 
+		delete_type(constants[i].signature);
+	cerr << "Done.\n";
+}
+@ %def cleanup_constants
+
+<<global:external functions>>=
+extern void initialise_constants();
+extern void insert_constant(int name, type * sig);
+extern type * get_signature(int name);
+extern void cleanup_constants();
+@ 
+
+\begin{comment}
+Information about function symbols (collected during parsing) are
+stored in a hash table for quick and easy access.
+We now describe this function symbol table.
+\end{comment}
+
+<<function symbol table>>=
+struct fEntry {
+        int name;
+        int minEffectArity;
+	int maxEffectArity;
+	fEntry(int n, int min, int max) {
+		name = n; minEffectArity = min; maxEffectArity = max; }
+};
+
+#define TABLESIZE 501
+static vector<fEntry> func_info[TABLESIZE];
+@ 
+
+\begin{comment}
+Clearly, we want a hash function that can be computed efficiently.
+Looking at the first and last characters in the function name seemed a
+reasonable idea. 
+(Looking at every character seemed expensive, but there is probably
+not much in it.)
+We need to add {\tt size} to make sure functions that begin and end
+with the same characters are hashed to different indices with high
+probability. 
+\end{comment}
+
+<<function symbol table>>=
+static int eshash(int name) {
+        // int size = name.size();
+        // int ret = name[0] * name[size-1] - (name[0] + name[size-1]) + size;
+        // ret = ret % TABLESIZE;
+        // return ret;
+	return name % TABLESIZE;
+}
+@ %def hash
+
+\begin{comment}
+We can probably have a scheme whereby we try out different hash
+functions at run time and decide on one that induces the best
+distribution of functions in the table.
+\end{comment}
+
+\begin{comment}
+Here we need to initialise information for functions that are
+implemented inside the code.
+\end{comment}
+
+<<function symbol table>>=
+void initFuncTable() {
+        insert_ftable(iAdd, 2); insert_ftable(iSub, 2);
+        insert_ftable(iMax, 2); insert_ftable(iMin, 2);
+        insert_ftable(iMul, 2); insert_ftable(iDiv, 2);
+        insert_ftable(iMod, 2); insert_ftable(iAtan2, 2);
+	insert_ftable(iSin, 1); insert_ftable(iCos, 1); 
+	insert_ftable(iSqrt, 1); insert_ftable(iExp, 1);
+        insert_ftable(iLT, 2); insert_ftable(iLTE, 2);
+        insert_ftable(iGT, 2); insert_ftable(iGTE, 2);
+	insert_ftable(iAssign, 2); insert_ftable(iEqual, 2);
+	insert_ftable(iNEqual, 2);
+	insert_ftable(iPoint, 1);
+}
+@ %def initFuncTable
+
+\begin{comment}
+Basic insertion is okay.
+We first check whether {\tt func} is already present before inserting.
+\end{comment}
+
+<<function symbol table>>=
+void insert_ftable(int func, int earity) {
+        int index = eshash(func);
+        int size = func_info[index].size();
+        for (int i=0; i!=size; i++)
+                if (func_info[index][i].name == func) {
+			if (earity < func_info[index][i].minEffectArity)
+				func_info[index][i].minEffectArity = earity;
+			else if (earity > func_info[index][i].maxEffectArity)
+				func_info[index][i].maxEffectArity = earity;
+			return;
+		}  
+        fEntry f(func, earity, earity);
+        func_info[index].push_back(f);
+        // print_ftable();
+}
+@ %def insert_ftable
+
+<<function symbol table>>=
+pair<int,int> getFuncEArity(int func) { 
+	assert(func > 0);
+	pair<int,int> ret(-1,-1);
+        int index = eshash(func);
+        int size = func_info[index].size();
+        for (int i=0; i!=size; i++) 
+                if (func == func_info[index][i].name) {
+			ret.first = func_info[index][i].minEffectArity; 
+			ret.second = func_info[index][i].maxEffectArity; 
+                        return ret;
+		}
+        cerr << "Error: Function " << getString(func) << " unknown. "
+                "Effective arity could not be determined.\n";
+        // assert(false); 
+        return ret; 
+}
+@ %def getFuncEArity
+
+<<function symbol table>>=
+void print_ftable() {
+        for (int j=0; j!=TABLESIZE; j++) {
+                cout << j << ": ";
+                int size = func_info[j].size();
+                for (int i=0; i!=size; i++)
+                        cout << "(" << func_info[j][i].name << " " 
+                             << func_info[j][i].minEffectArity << " "
+                             << func_info[j][i].maxEffectArity << ")\t";
+                cout << endl;
+        }
+}
+@ %def print_ftable
+
+<<global:external functions>>=
+/* function symbol table */
+extern void initFuncTable();
+extern void insert_ftable(int func, int earity);
+extern pair<int,int> getFuncEArity(int func);
+extern void print_ftable();
+@ 
+
+<<nonrigid constants>>=
+set<int> nonrigid_constants;
+
+void insert_nonrigid_constant(int name) { nonrigid_constants.insert(name); }
+bool is_rigid_constant(int name) {
+	return (nonrigid_constants.find(name) == nonrigid_constants.end());
+}
+@ 
+
+<<global:external functions>>=
+extern void insert_nonrigid_constant(int name);
+extern bool is_rigid_constant(int name);
+@ 
+
+\begin{comment}
+This facility is used to provide mappings from type names to type objects. 
+The initial assignment was performed in the parser.
+\end{comment}
+
+<<type name to type objects mapping>>=
+#include <map>
+static map<string, pair<int, type *> > type_fac;
+
+void insert_type(const string & tname, int x, type * tp) {
+        assert(type_fac.find(tname) == type_fac.end());
+        pair<int, type *> temp(x, tp);
+        type_fac[tname] = temp;
+}
+
+pair<int, type *> get_type(const string & tname) {
+        map<string, pair<int,type *> >::iterator p = type_fac.find(tname);
+        if (p == type_fac.end()) { pair<int,type *> ret(-5,NULL); return ret; }
+        return p->second;
+}
+
+void cleanup_synonyms() {
+	cerr << "Cleaning up type synonyms...";
+	map<string, pair<int, type *> >::iterator p = type_fac.begin();
+	while (p != type_fac.end()) { delete_type(p->second.second); p++; }
+	cerr << "Done.\n";
+}
+@ %def insert_type get_type cleanup_signatures
+
+%% >>
+
+<<global:external functions>>=
+extern void insert_type(const string & tname, int x, type * tp);
+extern pair<int, type *> get_type(const string & tname);
+extern void cleanup_synonyms();
+@ 
+
+\begin{comment}
+We next look at how statements are stored in the system. 
+We use a vector of linked-lists of statements, indexed by the leftmost 
+function symbol on the LHS of each statement.
+This allows us to jump straight to the relevant statements in constant 
+time when doing pattern matching.
+\end{comment}
+
+<<statements insertion and printing>>=
+void insert_statement(statementType * st) {
+	assert(st->anchor >= 0);
+	int gsize = grouped_statements.size();
+	/* grow vector if it is not big enough */
+	if (st->anchor > gsize-1)
+		for (int i=0; i!=st->anchor+1; i++)
+			grouped_statements.push_back(NULL);
+	assert(st->anchor < (int)grouped_statements.size());
+	/* insert statement */
+	if (grouped_statements[st->anchor] == NULL) {
+		grouped_statements[st->anchor] = st;
+		return;
+	}
+	statementType * p = grouped_statements[st->anchor];
+	while (p->next != NULL) p = p->next;
+	p->next = st;
+}
+@ %def insert_statement
+
+<<statements insertion and printing>>=
+void print_grouped_statements() {
+	setSelector(STDOUT);
+	for (int i=0; i!=(int)grouped_statements.size(); i++) {
+		if (grouped_statements[i] == NULL) continue;
+		ioprint("*****\n");
+		grouped_statements[i]->print();
+		ioprint("-----\n");
+	}
+}
+@ %def print_grouped_statements  
+
+<<global:external functions>>=
+extern void insert_statement(statementType * st);
+extern void print_grouped_statements();
+@ 
+
+\begin{comment}
+Here are some functions for checking container membership.
+\end{comment}
+
+<<misc functions>>=
+bool inVector(int x, vector<int> & v) {
+	vector<int>::iterator p = find(v.begin(), v.end(), x);
+	return (p != v.end());
+}
+bool subset(vector<int> v1, vector<int> v2) {
+	int size = v1.size();
+	for (int i=0; i!=size; i++) 
+		if (!inVector(v1[i], v2)) return false;
+	return true;
+}
+@ %def inVector subset
+
+<<global:external functions>>=
+bool inVector(int x, vector<int> & v);
+bool subset(vector<int> v1, vector<int> v2);
+@ 
+
+\begin{comment}
+The following implements uniform sampling from a collection of terms 
+represented in a (non-empty) list (the input argument).
+We have to go through the list first to find out the size of the collection.
+If the size is given as an argument, we can just flip a coin and go straight
+to the desired term.
+\end{comment}
+
+<<misc functions>>=
+vector<term *> usamplingset;
+pair<term *, float> uniformSampling(term * items) {
+	usamplingset.clear();
+	assert(items->isApp() && items->lc()->lc()->isD(iHash));
+	while (!items->isD(iEmptyList)) {
+		usamplingset.push_back(items->lc()->rc());
+		items = items->rc();
+	} 
+	int ssize = usamplingset.size();
+	int i = random() % ssize;
+	pair<term *, float> ret(usamplingset[i], 1.0 / ssize);
+	return ret;
+}
+@ 
+
+\begin{comment}
+The next function implements sampling from a categorical distribution.
+We assume the input argument has the form
+\[ [ (t_1,n_1), \ldots, (t_k,n_k), \]
+where each $t_i$ is a term and $n_i$ its probability.
+\end{comment}
+
+<<misc functions>>=
+vector<pair<term *,float> > msamplingset;
+pair<term *,float> categoricalSampling(term * arg) {
+	msamplingset.clear();
+	float counter = 0;
+	assert(arg->isApp() && arg->lc()->lc()->isD(iHash));
+	while (!arg->isD(iEmptyList)) {
+		pair<term *,float> element;
+		element.first = arg->lc()->rc()->fields[0];
+		counter += arg->lc()->rc()->fields[1]->numf;
+		element.second = counter;
+		msamplingset.push_back(element);
+		arg = arg->rc();
+	}
+	assert(msamplingset.size() > 0); assert(counter == 1);
+	int r = random() % 100;
+	unint i = 0;
+	while (r/100.0 > msamplingset[i].second) { i++; }
+	float prob;
+	if (i == 0) prob = msamplingset[i].second;
+	else prob = msamplingset[i].second - msamplingset[i-1].second;
+	pair<term *,float> ret(msamplingset[i].first,prob); 
+	return ret;
+}
+@ 
+
+\begin{comment}
+The next function implements sampling from a normal distribution.
+We use the Box-Muller-Marsaglia polar method described in \cite{knuth-taocp-2}.
+\end{comment}
+
+<<misc functions>>=
+float gaussDens(float mu, float sigma, float x) {
+	assert(sigma > 0);
+	float s1 = 1.0 / (sigma * sqrt( 2 * 3.14159)); 
+	float s2 = (x - mu) * (x - mu) / (2 * sigma * sigma);
+	float ret = s1 * exp ( -1.0 * s2); 
+	return ret;
+}
+
+pair<term *,float> ret;
+pair<term *,float> gaussianSampling(term * m, term * s) {
+	assert(m->isfloat && s->isfloat);
+	float u1, u2, v1, v2, S;
+	do {
+		u1 = (random() % 100) / 100.0;
+		u2 = (random() % 100) / 100.0;
+		v1 = 2*u1 - 1;
+		v2 = 2*u2 - 1;
+		S = u1*u1 + u2*u2;
+	} while (S >= 1.0);
+	float x1; // float x2;
+	if (S == 0) { x1 = 0; /* x2 = 0; */ } 
+	else { x1 = v1 * sqrt( -2*log(S)/S );
+		/* x2 = v2 * sqrt( -2*log(S)/S ); */ }
+
+	ret.first = new_term_float(m->numf + s->numf * x1);
+	ret.second = gaussDens(m->numf, s->numf, ret.first->numf);
+
+	return ret;
+}
+@ 
+
+
+<<misc functions>>=
+/* vector<pair<term *,float> > dgsamplingset;
+pair<term *,float> dgaussianSampling(term * m, term * s) {
+	assert(m->isfloat && s->isfloat);
+	dgsamplingset.clear();
+
+	float mu = m->numf; float sigma = s->numf;
+	pair<term *,float> cent;
+	cent.first = new_term_float(mu);
+	cent.second = gaussDens(mu,sigma,mu);
+
+	float total = 0;
+	for (int i=0; i!=6; i++) {
+		pair<term *,float> cent;
+		cent.first = new_term_float(mu + i*sigma);
+		cent.second = gaussDens(mu,sigma,mu + i*sigma);
+		dgsamplingset.push_back(cent);
+		total += cent.second;
+
+		if (i==0) continue;
+		
+		cent.first = new_term_float(mu - i*sigma);
+		cent.second = gaussDens(mu,sigma,mu + i*sigma);
+		dgsamplingset.push_back(cent);
+		total += cent.second;
+	}
+
+	float offset = 0;
+	for (unint j=0; j!=dgsamplingset.size(); j++) {
+		dgsamplingset[j].second = 
+			offset + dgsamplingset[j].second / total;
+		offset = dgsamplingset[j].second;
+	}
+
+	for (unint i=0; i!=dgsamplingset.size(); i++) {
+		setSelector(STDOUT);
+		dgsamplingset[i].first->print(); 
+		cout << "," << dgsamplingset[i].second << " ";
+		// revertSelector();
+	} cout << endl; 
+
+
+	int r = random() % 1000;
+	unint i = 0;
+	while (r/1000.0 > dgsamplingset[i].second) { i++; }
+	float prob;
+	if (i == 0) prob = dgsamplingset[i].second;
+	else prob = dgsamplingset[i].second - dgsamplingset[i-1].second;
+	pair<term *,float> ret(dgsamplingset[i].first, prob);
+	return ret;
+} */
+@ 
+
+\begin{comment}
+This is the public function called to invoke the appropriate sampling routine.
+\end{comment}
+
+<<misc functions>>=
+pair<term *, float> sample(term * density) {
+	assert(density->isApp());
+	pair<term *, float> ret(NULL,0.0);
+	term * distr = density->spineTip();
+	if (distr->isF(iUniform)) 
+		ret = uniformSampling(density->rc());
+	else if (distr->isF(iCategorical))
+		ret = categoricalSampling(density->rc());
+	else if (distr->isF(iGaussian)) {
+		float m = density->lc()->rc()->numf;
+		float s = density->rc()->numf;
+		while (true) {
+		     ret = gaussianSampling(density->lc()->rc(), density->rc());
+		     if (fabs(ret.first->numf - m) <= 2*s) break;
+		     ret.first->freememory();
+		}
+	}
+	// else if (distr->isF(iDGaussian))
+	//	ret = dgaussianSampling(density->lc()->rc(), density->rc());
+	else if (distr->isF(iPoint)) {
+		ret.first = density->rc()->clone(); ret.second = 1.0; }
+	return ret;
+}
+@
+
+<<global:external functions>>=
+pair<term *, float> sample(term * density);
+@ 
+
+\begin{comment}
+The following are two functions for converting numbers to their string
+representations.
+\end{comment}
+
+<<global:external functions>>=
+#include <sstream>
+inline string numtostr(const int i) { stringstream s; s << i; return s.str(); }
+inline string numtostr(const double i) { stringstream s; s << i; return s.str(); }
+@ 
+
+%% <itoa>=
+%% 		/* char * itoa(int value, char *strg, int radix) {
+%%         char tmp[33];
+%%         char *tp = tmp;
+%%         int i;
+%%         unsigned v;
+%%         int sign;
+%%         char *sp;
+%% 
+%%         if (radix > 36 || radix <= 1) { assert(false); }
+%% 
+%%         sign = (radix == 10 && value < 0);
+%%         if (sign) { v = -value; assert(false); }
+%%         else v = (unsigned)value;
+%% 
+%%         while (v || tp == tmp) {
+%%                 i = v % radix;
+%%                 v = v / radix;
+%%                 if (i < 10) *tp++ = i+'0';
+%%                 else *tp++ = i + 'a' - 10;
+%%         }
+%% 
+%%         if (strg == 0) {
+%%                 strg = (char *)malloc((tp-tmp)+sign+1);
+%%                 assert(strg);
+%%         }
+%%         sp = strg;
+%%         
+%%         if (sign) { *sp++ = '-'; assert(false); }
+%%         while (tp > tmp)
+%%                 *sp++ = *--tp;
+%%         *sp = 0;
+%%         return strg;
+%% 	} */
+%% 
+%% /* Extract from stlsoft_integer_to_string.h
+%%  *
+%%  * www:        http://www.synesis.com.au/stlsoft
+%%  *             http://www.stlsoft.org/
+%%  *
+%%  * Copyright (C) 2002, Synesis Software Pty Ltd.
+%%  * (Licensed under the Synesis Software Standard Source License:
+%%  *  http://www.synesis.com.au/licenses/ssssl.html)
+%%  *
+%%  * ...
+%%  *
+%%  * ////////////////////////////////////////////////////////// */
+%% static const char  s_characters[20] = 
+%% 	{
+%% 		'9', '8', '7', '6', '5', '4', '3', '2', '1', '0',
+%% 		'1', '2', '3', '4', '5', '6', '7', '8', '9', 0
+%% 	};
+%% static const char  *s_mid  = s_characters + 9;
+%% 
+%% char * unint_to_string(char *buf, size_t cchBuf, unsigned int i, 
+%% 		      const char * prefix) {
+%%     char   *psz    =   buf + cchBuf - 1;   // Set psz to last char
+%%     *psz = 0;                           // Set terminating null
+%% 
+%%     do {
+%%         unsigned    lsd = i % 10;   // Get least significant digit
+%% 
+%%         i /= 10;                    // Prepare for next most significant digit
+%% 
+%%         --psz;                      // Move back
+%% 
+%%         *psz = s_mid[lsd]; // Place the digit
+%% 
+%%     } while (i != 0);
+%%     
+%%     do { --psz; *psz = *prefix; prefix++; } while (*prefix != 0);
+%% 
+%%     return psz;
+%% }
+%% 
+%% @ 
+%% >>
+

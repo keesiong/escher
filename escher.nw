@@ -1,0 +1,168 @@
+% -*- mode: Noweb; noweb-code-mode: c++-mode; c-basic-offset: 8; -*-
+
+\documentclass[10pt,fleqn]{report}
+\usepackage[T1]{fontenc}
+\usepackage[latin1]{inputenc}
+\usepackage{noweb}
+\usepackage{a4wide}
+\usepackage{graphicx}
+\usepackage{fancyhdr}
+\usepackage{latexsym}
+\usepackage{amsmath}
+\usepackage{amsbsy}
+\usepackage{amsthm}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{euscript}
+\usepackage{epsf}
+\usepackage{url}
+\usepackage{makeidx}
+% \usepackage{manfnt}
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{observation}[theorem]{Observation}
+\newtheorem{fact}[theorem]{Fact}
+
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{example}[theorem]{Example}
+\newtheorem{algorithm}[theorem]{Algorithm}
+\newtheorem{comment}[theorem]{Comment}
+\newtheorem{problem}[theorem]{Problem}
+\newtheorem{question}[theorem]{Question}
+\newtheorem{assumption}[theorem]{Assumption}
+%\newtheorem*{note}{Note}
+\newtheorem*{notation}{Notation}
+
+\newcommand{\nec}[1]{\ensuremath{\square_{#1}}}
+\newcommand{\poss}[1]{\ensuremath{\Diamond_{#1}}}
+\newcommand{\necseq}[1]{\ensuremath{\pmb{\square}_{#1}}}
+
+
+\input{title}
+
+\fancypagestyle{plain}{%
+\fancyhf{} % clear all header and footer fields
+\fancyfoot[C]{\bfseries \thepage} % except the center
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}}
+             
+\pagestyle{fancy}
+\lhead{\bfseries \rightmark}
+\rhead{\thepage}
+\cfoot{}     
+\lfoot{}     
+\rfoot{}  
+
+% \noweboptions{shift}
+
+%% This is used to relax the constraint of not breaking chunks across pages.
+\def\nwendcode{\endtrivlist \endgroup \vfil\penalty10\vfilneg}
+\let\nwdocspar=\smallbreak
+
+\newcommand{\Alkemy}{\textsc{Alkemy} }
+\newcommand{\note}{\textit}
+\newcommand{\dstruct}{\texttt}
+\newcommand{\func}{\texttt}
+\newcommand{\src}{\texttt}
+\newcommand{\codechunk}{\textit}
+\newcommand{\ea}{\textit{et al.} }
+\newcommand{\eg}{\textit{e.g.,} }
+\newcommand{\ie}{\textit{i.e.,} }
+
+\newcommand{\prs}{\rightarrowtail}
+\newcommand{\Balpha}{{\mathfrak B}_{\alpha}}
+\newcommand{\dlang}{\langle\langle}
+\newcommand{\drang}{\rangle\rangle}
+\newcommand{\cB}{{\cal B}}
+\newcommand{\cF}{{\cal F}}
+\newcommand{\cG}{{\cal G}}
+\newcommand{\cH}{{\cal H}}
+
+\newcommand{\bt}{{\bf t}}
+\newcommand{\bu}{{\bf u}}
+\newcommand{\bv}{{\bf v}}
+\newcommand{\bx}{{\bf x}}
+\newcommand{\by}{{\bf y}}
+
+\newcommand{\comp}{\, \raisebox{0.1em}{$\scriptscriptstyle \circ$} \,}
+\newcommand{\one}{\hspace*{2em}}
+\newcommand{\two}{\hspace*{4em}}
+\newcommand{\three}{\hspace*{6em}}
+\newcommand{\four}{\hspace*{8em}}
+\newcommand{\five}{\hspace*{10em}}
+\newcommand{\six}{\hspace*{12em}}
+\newcommand{\seven}{\hspace*{14em}}
+\newcommand{\eight}{\hspace*{16em}}
+
+\addtocounter{secnumdepth}{1}
+
+\makeindex
+
+\begin{document}
+\thispagestyle{empty}
+\begin{titlepage}
+    \settitle{An Implementation of Escher}
+    \setsubtitle{A Work In Perpetual Progress}
+    \setsubtitle{Version 2015}
+    \begin{center}
+        \vspace{\stretch{0.7}}
+        \resizebox{10cm}{!}
+         {\includegraphics{e5.eps}}
+    \end{center}
+   \setauthor{Kee Siong Ng}
+\end{titlepage}
+
+% \begin{titlepage}
+%  \mycopyrightnotice
+% \end{titlepage}
+
+% \input{preface}
+
+\pagenumbering{Roman}
+\tableofcontents
+\pagebreak
+
+\pagenumbering{arabic}
+
+\input{introduction}
+
+
+% \input{bigpicture}
+
+% \chapter{An Interpreter for Escher}
+\input{interpreter}
+
+% \chapter{Bugs History}
+% \input{bugs-track}
+
+\input{sys-modules}
+
+\input{programming}
+
+\chapter{A Listing of the Code Chunks}
+\nowebchunks
+
+% Start the references
+% \renewcommand{\baselinestretch}{1}\small\normalsize
+% \setlength{\parskip}{0cm}
+% \addcontentsline{toc}{chapter}{References}
+\bibliographystyle{alpha}
+\bibliography{refs}
+
+\printindex
+
+\end{document}
+
+%%% Local Variables: 
+%%% mode: noweb
+%%% noweb-code-mode: c++-mode
+%%% c-basic-offset: 8
+%%% TeX-master: t
+%%% End: 
+
+
+

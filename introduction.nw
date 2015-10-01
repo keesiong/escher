@@ -1,0 +1,735 @@
+\chapter{Introduction}
+
+Escher is a functional logic programming language first introduced
+in \cite{lloyd95declarative} and \cite{lloyd99programming}.
+It was designed with the intention to provide in a simple
+computational mechanism the best features of functional and logic
+programming. 
+The basic approach taken in the desgin of Escher is simple: start
+from Haskell and add logic programming facilities.
+(There are other approaches one can take in the design of functional
+logic programming languages; see, for example,
+\cite{nadathur-miller98} and \cite{hanus94}.)
+
+To understand Escher, we need to understand two things.
+The first is the form of a valid Escher program.
+The second is the underlying computational mechanism of the language.
+These are covered in \S \ref{subsec:escher foundation}, which is
+essentially a summary of \cite[Chap. 5]{lloyd03logic-learning}.
+In \S \ref{subsec:escher haskell prolog} the relationships between
+Escher, Haskell and Prolog are clarified.
+We give some example Escher programs in \S \ref{subsec:escher programs}.
+
+% \cite{eder98thesis}
+
+\section{Logical Foundation}\label{subsec:escher foundation}
+The logic underlying Escher is a polymorphically typed higher-order
+logic.
+The \emph{terms}\index{terms} of the logic are the terms of the typed
+$\lambda$-calculus, formed in the usual way by application,
+abstraction, and tupling from the set of constants and a set of
+variables.
+An Escher program is a theory in the logic in which each formula is a
+particular kind of equation, namely, a statement.
+
+\begin{definition}\label{def:statement}
+A {\em statement} is a term of the form $h = b$, where $h$
+has the form $f\;t_1\ldots t_n$, $n\geq 0$, for some function $f$,
+each free variable in $h$ occurs exactly once in $h$, and $b$ is
+type-weaker than $h$.
+\end{definition}
+
+\noindent The term $h$ is called the {\em head} and the term $b$ is
+called the {\em body} of the statement. 
+The statement is said to be {\em about} $f$.
+
+For our purpose here, we say a term $s : \sigma$ is type weaker than a 
+term $t : \tau$ if there exists a type substitution $\gamma$ such that
+$\tau = \sigma \gamma$ and every free variable in $s$ is a free
+variable in $t$.
+The type weaker condition stipulates that the body of a statement
+cannot contain free variables not already occurring in the head of the 
+statement.
+
+\begin{definition}
+The definition of a function $f$ is the collection of all statements
+about $f$, together with the signature for $f$.
+\end{definition}
+
+\begin{definition}
+An {\em Escher program} is a collection of definitions.
+\end{definition}
+
+\begin{example}
+Here are two Escher programs for performing list concatenations.
+\begin{gather*}
+\it{concat_1} : \it{List}\;a \rightarrow \it{List}\;a \rightarrow \it{List}\;a\\
+\it{concat_1}\;[]\;x = x \\
+\it{concat_1}\;(\#\,x\,y)\;z = (\#\;x\;(\it{concat_1}\;y\;z))
+\end{gather*}
+\vspace{-2em}
+\begin{gather*}
+  \it{concat_2} : \it{List}\;a \times \it{List}\;a \times
+  \it{List}\;a \rightarrow \varOmega \\
+  \it{concat_2}\; (u,v,w) = (u = [] \;\wedge\; v = w) \;\vee \\
+  \hspace{10em}\exists r.\exists x.\exists y.(u = (\#\,r\,x)
+  \;\wedge\; w = (\#\,r\,y) \;\wedge\; \it{concat_2}\;(x,v,y)) 
+\end{gather*}
+The first is written in the functional programming style. 
+(It is in fact a valid Haskell program.)
+The second is written in the relational or logic programming style.
+The term $\it{concat_2}\;(x,y,z)$ evaluates to $\top$ iff $z$ is a
+concatenation of $x$ and $y$.
+We will look at $\it{concat_2}$ in more details to see how logic
+programming is supported in Escher shortly.
+\end{example}
+
+\begin{definition}
+A {\em redex} of a term $t$ is a subterm of $t$ that is
+$\alpha$-equivalent to an instance of the head of a statement.
+\end{definition}
+
+\noindent Recall that two terms are $\alpha$-equivalent iff they
+differ only in the names of bound variables. 
+A subterm $s$ of $t$ is a redex if we can find a statement $h = b$ and
+a term substitution $\theta$ mapping variables to terms such that
+$h\theta$ is $\alpha$-equivalent to $s$.
+
+A redex is outermost if it is not a proper subterm of
+another redex.
+Two outermost redexes are by definition disjoint.
+We are interested primarily in outermost redexes because we want the
+evaluation strategy to be lazy.
+
+Given an Escher program and a term $t$, a redex selection rule $S$
+maps $t$ to a subset of the set of outermost redexes in $t$.
+A standard redex selection rule is the leftmost selection rule $S_L$.
+Given a term $t$, the rule $S_L$ picks out the (single) leftmost outermost
+redex in $t$.
+This is the selection rule implemented in the current Escher
+interpreter.
+
+\begin{definition}
+A term $s$ is obtained from a term $t$ by a {\em computation step}
+using the selection rule $S$ if the following conditions are
+satisfied.
+\begin{enumerate}\itemsep0mm\parskip0mm
+ \item $S(t) = \{ r_i \}$ is non-empty.
+ \item For each $i$, the redex $r_i$ is $\alpha$-equivalent to an
+       instance $h_i\theta_i$ of the head of a statement $h_i = b_i$ for
+       some term substitution $\theta_i$.
+ \item $s$ is the term obtained from $t$ by replacing each redex $r_i$
+       by $b_i\theta_i$.
+\end{enumerate}
+\end{definition}
+
+\begin{definition}
+A {\em computation} from a term $t$ is a sequence $\{ t_i \}_{i=1}^n$
+of terms where $t = t_1$ and $t_{i+1}$ is obtained from $t_i$ by a
+computation step. 
+The term $t_1$ is called the {\em goal} of the computation and $t_n$
+is called the {\em answer}.
+\end{definition}
+
+As is standard in typed declarative languages, run-time type checking
+is not necessary in Escher.
+The fact that the body of every statement is type weaker than its head
+and that every free variable in the head of a statement occurs exactly
+once ensures that every computation step produces a new term that is
+well typed.
+
+Central to Escher are some basic functions defined in the booleans module.
+These functions, together with the term rewriting mechanism described
+above, provide logic programming facilities in the functional
+programming setting.
+I list here some of these boolean functions.
+\begin{gather}
+\top \,\wedge\, x = x \\
+\bot \,\wedge\, x = \bot \\
+%(\it{if} \,u\, \it{then} \,v\, \it{else} \,w)\,\wedge\, t =
+%   \it{if} \,(u\,\wedge\,t)\, \it{then}\,v\,\it{else}\,(w\,\wedge\,t) \\
+\exists x.\bot = \bot \\
+{\bf u}\,\wedge\,\exists x.{\bf v} = \exists x.({\bf u} \,\wedge\,
+  {\bf v}) \label{booleans:side condition} \\ 
+\exists x_1.\exists x_2.\cdots.\exists x_n.
+  ({\bf x} \;\wedge\; (x_1 = {\bf u}) \;\wedge\; {\bf y}) =
+    \exists x_2.\cdots.\exists x_n.({\bf x}\{x_1/{\bf u}\} \wedge
+                      {\bf y}\{x_1/{\bf u}\}) \label{booleans:exists}\\
+\forall x.(\bot \rightarrow {\bf u}) = \top \\
+\forall x_1.\forall x_2.\cdots.\forall x_n.
+  ({\bf x}\,\wedge\,(x_1 = {\bf u})\,\wedge\,{\bf y} \rightarrow 
+   {\bf v}) = \notag \\
+\hspace{10em}  \forall x_2.\cdots.\forall x_n.
+     ({\bf x}\{x_1/{\bf u}\} \,\wedge\, {\bf y}\{x_1/{\bf u}\}
+       \rightarrow {\bf v}\{x_1/{\bf u}\}) \label{booleans:forall}
+\end{gather}
+Most of these equations are fairly straightforward.
+One thing is worth noting though.
+Variables typeset in bold above are actually syntactical variables.
+So an equation like (\ref{booleans:side condition}) actually stands for
+a (possibly infinite) collection of Escher statements with ${\bf u}$ and
+${\bf v}$ instantiated to all possible terms of type boolean.
+The use of syntactical variables usually come with side conditions.
+For example, for (\ref{booleans:side condition}) to be applicable, the
+syntactical variable ${\bf u}$ must not contain a free occurrence of $x$.
+Similarly, $x_1$ must not occur free in ${\bf u}$ for
+(\ref{booleans:exists}) and (\ref{booleans:forall}) to work. 
+
+\begin{example}
+The following is an example Escher computation using the $S_L$ redex
+selection rule. 
+The redex selected at each time step is highlighted.
+Note how Equation (\ref{booleans:exists}) given above is used to
+remove the existential quantifiers.
+\begin{align*}
+&\underline{\it{concat_2}\;([1],[2],w)} \\
+=\;\; & (\underline{[1] = []} \,\wedge\, [2] = w) \;\vee\;
+   \exists r.\exists x.\exists y.([1] = (\#\,r\,x) \;\wedge\; w = (\#\,r\,y)
+\;\wedge\; \it{concat_2}\;(x, [2], y)) \\
+=\;\; & \underline{(\bot \wedge [2] = w)} \;\vee\;
+  \exists r.\exists x.\exists y.([1] = (\#\,r\,x) \;\wedge\; w = (\#\,r\,y)
+\;\wedge\; \it{concat_2}\;(x, [2], y)) \\
+=\;\; & 
+  \underline{\bot \;\vee\;
+             \exists r.\exists x.\exists y.([1] = 
+                (\#\,r\,x) \;\wedge\; w = (\#\,r\,y) \;\wedge\; 
+                \it{concat_2}\;(x, [2], y))} \\
+=\;\; & \exists r.\exists x.\exists y.
+        (\underline{[1] = (\#\,r\,x)} \;\wedge\; w = (\#\,r\,y)
+         \;\wedge\; \it{concat_2}\;(x, [2], y)) \\
+=\;\; & \underline{\exists r.\exists x.\exists y.(r = 1 \;\wedge\; x = [] \;\wedge\; 
+   w = (\#\,r\,y) \;\wedge\; \it{concat_2}\;(x, [2], y))} \\
+=\;\; & \underline{\exists x.\exists y.(x = [] \;\wedge\; w = (\#\,1\,y) \;\wedge\;
+   \it{concat_2}\;(x,[2],y))} \\
+=\;\; & \exists y.(w = (\#\,1\,y) \;\wedge\; \underline{\it{concat_2}\;([], [2], y)}) \\
+% = \exists y.(w = (\#\,1\,y) \;\wedge\; \ldots) \\
+% = \exists y.(w = 1:y \;\wedge\;\\
+% \hspace{2.4em}  (([] = [] \;\wedge\; y = 2:[])
+%       \;\vee\; \exists r'.\exists x'.\exists y'.([] = r':x' \wedge
+%       \cdots)))\\
+ & \ldots\\
+=\;\; & \underline{\exists y.(w = (\#\,1\,y) \;\wedge\; y = [2])} \\
+=\;\; & (w = [1,2])
+\end{align*}
+\end{example}
+
+\begin{example}\label{ex:multiple answers}
+Given the goal $\it{concat_2}\;(x,y,[1,2])$, Escher will return with the
+following answer
+\[ (x = [] \;\wedge\; y = [1,2]) \;\vee\; (x = [1] \;\wedge\; y =
+  [2]) \;\vee\; (x = [1,2] \;\wedge\; y = []), \] 
+which is computed using the same mechanism described in the previous
+example.
+\end{example}
+
+\section{Escher, Haskell and Prolog}\label{subsec:escher haskell prolog}
+We first explore the relationship between Escher and Haskell.
+At the logic level, every Haskell program is an Escher program
+% \footnote{This is not exactly true at the practical level, however,
+%  since Haskell has several advanced language features not currently
+%  available in Escher. But this is only a software maturity issue.
+%  Given more development time, these language features will be
+%  implemented and Escher will then be able to run any valid Haskell program.},
+and every Escher program is a (syntactically-correct) Haskell program
+which may not compile.
+In that sense, Escher is a superset of Haskell.
+%
+The difference between Escher and Haskell comes down to the following
+two points.
+\begin{itemize}\itemsep2mm\parskip0mm
+ \item Haskell allows pattern matching only on data constructors.
+   Escher extends this by allowing pattern matching on function
+   symbols as well as data constructors.
+   Examples of equations that Haskell cannot handle but
+   Escher can are those in the booleans module given earlier.
+
+ \item The second thing that Escher can do but Haskell can't is
+   reduction of terms inside lambda abstractions.
+   This mechanism allows Escher to handle sets (and similar data
+   types) in a natural and intensional way.
+   This is usually achieved with the use of syntactical variables.
+
+\end{itemize}
+The extra expressiveness afforded by Escher comes with a price tag,
+however. 
+Some common optimisation techniques developed for efficient
+compilation of Haskell code (see \cite{peyton-jones87}) cannot be used
+in the implementation of Escher.
+In other words, efficiency is at present still a non-trivial issue for
+Escher. 
+% I believe there is no inherent complexity that cannot be overcome,
+% however. 
+
+% This is assuming we use the lambda notation to represent sets (the
+% curly brackets $\{\}$ are used for something else in Haskell) and
+% write $(\Sigma \, \lambda x.t)$ for $\exists x.t$ and 
+% $(\Pi \, \lambda x.t)$ for $\forall x.t$.
+
+
+% \begin{example}
+% An example of Escherian matching on syntactic variables is the
+% following equality rule for data constructors in the Booleans module:
+% \begin{gather*}
+%  ({\bf C}\,x_1 \ldots x_n = {\bf C}\,y_1 \ldots y_n) =
+%     (x_1 = y_1) \wedge \cdots \wedge (x_n = y_n) \\
+% \hspace{4em}   \text{\% where ${\bf C}$ is a data constructor of arity $n$.}
+% \end{gather*}
+% \end{example}
+
+% \begin{example}
+% An example of Escherian matching on function symbols is the following
+% rule for conjunction in the Booleans module:
+% \[ (x \vee y) \wedge z = (x \wedge z) \vee (y \wedge z). \]
+% \end{example}
+
+% \begin{example}
+% An example of Escherian matching on both function symbols and
+% syntactical variables is the following rule for conjunction:
+% \[ {\bf u} \wedge (\exists x_1.\cdots \exists x_n.{\bf v}) =
+%      \exists x_1.\cdots \exists x_n.({\bf u} \wedge {\bf v}). \]
+% \end{example}
+
+%% \section{Questions about Escher}
+%% \begin{question} 
+%% Syntactical variables aren't needed just for the case when term
+%% substitution result in problems. They are also used for side
+%% conditions. For example, see the first statements of $=$ and
+%% $\mathit{less}$. 
+%% \end{question}
+%% 
+%% \begin{question}
+%% Why isn't there any rules for implies?
+%% \end{question}
+%% 
+%% \begin{question}
+%% The `definition' corresponding to $\beta$-reduction on pg 192
+%% is not a statement because it doesn't start with a function symbol.
+%% \end{question}
+%% 
+
+% \section{Escher and Prolog}\label{subsec:escher prolog}
+We next explore the relationship between Escher and Prolog.
+Perhaps suprisingly, there is actually a significant overlap between
+the two languages. 
+In fact, any Prolog program defined without using cuts can be
+mechanically translated into Escher via Clark's completion algorithm
+\cite{clark78}.
+For example, the Escher program $\it{concat_2}$ given earlier is just
+the completion of the following Prolog definition. 
+\begin{gather*}
+\it{concat_2}\;([],L,L).\\
+\it{concat_2}\;([X|L1],L2,[X|L3]) \longleftarrow \it{concat_2}\;(L1,L2,L3).
+\end{gather*}
+
+Procedurally, there is a difference between Escher and Prolog in that
+Prolog computes alternative answers one at a time via backtrackking
+whereas Escher returns all alternative answers in a disjunction (a set).
+This point is illustrated in Example \ref{ex:multiple answers} above.
+
+\section{Example Programs}\label{subsec:escher programs}
+I end this short introduction with some example Escher programs.
+The aim here is to showcase the different styles of declarative
+programming supported by Escher.
+An Escher interpreter is available for download as a separate program
+from \url{http://rsise.anu.edu.au/~kee}. 
+
+\begin{example}
+Here is how quick sort can be written in Escher.
+This is just a vanilla Haskell program that doesn't make use of
+special logic programming facilities in Escher.
+\begin{gather*}
+\it{qsort} : \it{List}\; a \rightarrow \it{List}\; a\\
+\it{qsort}\; [] = [] \\
+\it{qsort}\; (\#\,x\,y) = 
+    \it{concat_1}\; (\it{qsort}\; (\it{filter}\; (\leq x)\; y))\;
+                            (\#\,x\;(\it{qsort}\; (\it{filter}\; (> x)\; y)))
+\end{gather*}
+\vspace{-2em}
+\begin{gather*}
+\it{filter} : (a \rightarrow \varOmega) \rightarrow \it{List}\; a \rightarrow \it{List}\; a\\
+\it{filter}\; p\; [] = []\\
+\it{filter}\; p\; (\#\,x\,y) = 
+   \it{if}\; (p\,x) \;\it{then}\; (\#\;x\;(\it{filter}\; p\; y) \;\it{else}\; (\it{filter}\; p\; y)
+\end{gather*}
+\end{example}
+
+\begin{example}
+The following is an example of an Escher program for computing
+permutations of lists.
+The function $\mathit{permute}$ returns true iff the two input
+arguments are permutations of each other.
+The function $\mathit{delete}$ is a subsidiary function of
+$\mathit{permute}$ that returns true iff the third argument is the
+result of removing the first argument from the second argument.
+\begin{gather*}
+\it{permute} : (\it{List}\;a) \times (\it{List}\;a) \rightarrow \varOmega\\
+\it{permute}\;([],x) = (x = []) \\
+\it{permute}\;((\#\;x\;y), w) = 
+    \exists u.\exists v.\exists z.(w = (\#\;u\;v) \;\wedge\;
+             \it{delete}\;(u, (\#\;x\;y), z) \;\wedge\; \it{permute}\;(z,v))
+\end{gather*}
+\vspace{-2em}
+\begin{gather*}
+\it{delete} : a \times (\it{List}\;a) \times (\it{List}\;a)
+\rightarrow \varOmega \\
+\it{delete} (x,[],y) = \bot \\
+\it{delete} (x, (\#\;y\;z), w) = (x = y \;\wedge\; w = z) \;\vee\;
+              \exists v.(w = (\#\;y\;v) \;\wedge\; \it{delete}\;(x,z,v))
+\end{gather*}
+Given $\it{permute}\;([1,2,3],[2,1,3])$, Escher will return $\top$.
+Given $\it{permute}\;([1,2,2],x)$, Escher will return the answer
+\[ x = [1,2,3] \;\vee\; x = [1,3,2] \;\vee\; x = [2,1,3] \;\vee\; 
+    x = [2,3,1] \;\vee\; x = [3,1,2] \;\vee\; x = [3,2,1]. \]
+\end{example}
+
+\begin{example}
+Here are some standard functions defined on sets.
+\begin{gather*}
+\it{union} : (a \rightarrow \varOmega) \rightarrow (a \rightarrow
+\varOmega) \rightarrow (a \rightarrow \varOmega) \\
+\it{union}\; s\; t = \lambda x.((s\;x)\,\vee\,(t\; x))
+\end{gather*}
+\vspace{-2em}
+\begin{gather*}
+\it{intersect} : (a \rightarrow \varOmega) \rightarrow (a \rightarrow
+\varOmega) \rightarrow (a \rightarrow \varOmega) \\
+\it{intersect}\; s\; t = \lambda x.((s\; x)\,\wedge\, (t\; x)) 
+\end{gather*}
+\vspace{-2em}
+\begin{gather*}
+\it{minus} : (a \rightarrow \varOmega) \rightarrow (a \rightarrow
+\varOmega) \rightarrow (a \rightarrow \varOmega) \\
+\it{minus}\; s\; t = \lambda x.((s\; x) \,\wedge\, \neg (t\; x)) 
+\end{gather*}
+\vspace{-2em}
+\begin{gather*}
+\it{subset} : (a \rightarrow \varOmega) \rightarrow (a \rightarrow
+\varOmega) \rightarrow \varOmega \\
+\it{subset}\; s\; t = \forall x.((s\; x) \rightarrow (t\; x))) 
+\end{gather*}
+Similar functions for multisets can be just as easily defined.
+\end{example}
+
+Chapter \ref{chap:escher programming} contains more programming
+examples.
+
+\section{Installing Escher}
+The source code for Escher is available for download from
+\url{http://rsise.anu.edu.au/~kee/}.
+The file README.1ST contains installation instructions.
+
+\section{Using Escher}
+The following shows a simple session with Escher.
+\begin{small}
+\begin{verbatim}
+> escher -i
+prompt> import booleans.es ;
+  Reading booleans.es...done
+prompt> import numbers.es ;
+prompt> : (add 37.4 4.6) ;
+  Query: ((add 37.4) 4.6)
+  Answer: 42 ;
+prompt> import lists.es ;
+prompt> type ListInt = (List Int) ;
+prompt> myg : ListInt -> Bool ;
+prompt> (myg []) = False ;
+prompt> (myg (# x y)) = True ;
+prompt> set1 : ListInt -> Bool ;
+prompt> set1 = { [], [1,2,3] } ;
+prompt> set2 : ListInt -> Bool ;
+prompt> set2 = { [] } ;
+prompt> : \exists y.(&& (set1 y) (myg y)) ;
+  Query: (sigma \y.((&& (set1 y)) (myg y)))
+  Answer: True ;
+prompt> : \exists y.(&& (set2 y) (myg y)) ;
+  Query: (sigma \y.((&& (set2 y)) (myg y)))
+  Answer: False ;
+prompt> import lists.es ;
+  Reading lists.es...done
+prompt> : (permute ([1,2],x)) ;
+  Query: (permute (((# 1) ((# 2) [])),x))
+  Answer: ((|| ((== x) ((# 1) ((# 2) [])))) ((== x) ((# 2) ((# 1) [])))) ;
+prompt> quit ;
+Quiting Escher...
+\end{verbatim}
+\end{small}
+
+\section{Escher Prelude}
+Escher supports six system-defined types: {\tt Bool}, {\tt Int}, 
+{\tt Float}, {\tt Char}, {\tt String}, {\tt ListString}.
+The last of these, {\tt ListString}, is actually a synonym for 
+{\tt (List Char)}.
+
+There are a number of system modules: Booleans, Numbers, Lists, and Sets.
+These can be found in Chapter~\ref{chap:system modules}.
+
+% \section{Advanced Features of Escher}
+% \subsection{Syntactic Variables and Side Conditions on Them}
+% 
+% \subsection{Function Overloading}
+
+\section{Escher's Syntax}
+We give the grammar for valid input to the interpreter in this section.
+Regular expressions for tokens like {\tt FILENAME}, {\tt IDENTIFIER1},
+{\tt IDENTIFER2} etc are given at the end of the section.
+
+The Escher interpreter takes {\tt program\_statements} one at a time.
+A program statement is either an import statement, an Escher
+statement, a query or a quit instruction.
+\begin{small}
+\begin{verbatim}
+    input : program_statements ;
+    
+    program_statements : /* empty */ | program_statements program_statement ;
+    program_statement : import | statement | type_info | query | quit ;
+    
+    quit : "quit" ';'
+    import : "import" FILENAME ';'
+    statement : term '=' term ;
+\end{verbatim}
+\end{small}
+
+We now look at the grammar for terms.
+A {\tt term} is a term possibly with syntactic variables in it.
+The grammar for {\tt term} is defined inductively as follows.
+Each syntactic variable is a term.
+Each variable is a term.
+Each constant, which can be either a function or a data constructor,
+is a term.
+If {\tt t1} and {\tt t2} are terms having appropriate types, then
+{\tt (t1 t2)} is a term.
+If {\tt x} is a variable and {\tt t} is a term, then 
+{\tt $\backslash$x.t} is a term.
+If {\tt t1}, {\tt t2}, $\ldots$, {\tt tn} are terms, then 
+{\tt (t1,t2,$\ldots$,tn)} is a term.
+Syntactic variables can come with side conditions. 
+These are stated using {\tt sv\_condition}.
+There are four kinds of condition we can state. 
+We can specify that a syntactic variable must be a variable or a
+constant.
+We can also require that the instantiation of a syntactic variable be
+equal or not equal to the instantiation of an earlier syntactic variable.
+
+\begin{small}
+\begin{verbatim}
+    term : SYNTACTIC_VARIABLE | SYNTACTIC_VARIABLE sv_condition
+         | VARIABLE  
+         | FUNCTION | DATA_CONSTRUCTOR | DATA_CONSTRUCTOR_INT  
+         | DATA_CONSTRUCTOR_FLOAT | DATA_CONSTRUCTOR_STRING
+         | IDENTIFIER1 | IDENTIFIER2
+         | '(' term term ')'
+         | '\' VARIABLE '.' term
+         | '(' terms_product ')'
+         | term_sugar 
+         ;
+    terms : term | terms term ;
+          
+    terms_product : /* empty */ | terms_product ',' term ;
+          
+    sv_condition : '/' VAR '/' | '/' CONST '/'
+                 | '/' EQUAL ',' SYNTACTIC_VARIABLE '/'
+                 | '/' NOTEQUAL ',' SYNTACTIC_VARIABLE '/'
+                 ;
+\end{verbatim}
+\end{small}
+
+Terms as defined can be cumbersome to work with.
+To ease the writing of the spec file, syntactic sugars are provided
+for sets, lists, and the quantifiers.
+This is how they works.
+\begin{itemize}\itemsep1mm\parskip0mm
+ \item A set like {\tt \{t1, t2\}} will be turned into the term  
+   \begin{verbatim}    \x.(ite (== x t) True (ite (== x t2) True False))\end{verbatim}
+   before Escher can process it.
+   Here {\tt ite} is the familiar $\it{if\text{-}then\text{-}else}$
+   function. 
+ \item A list like {\tt [ t1, t2 ]} will be turned into the term
+   {\tt (\# t1 (\# t2 []))}.
+ \item In accordance with the mathematics (see
+   \cite[pg. 43]{lloyd03logic-learning}), a formula like 
+   {\tt $\backslash$exists x.t} will be turned into the term 
+   {\tt (sigma $\backslash$x.t)} and a formula like 
+   {\tt $\backslash$forall x.t} will be turned into the term 
+   {\tt (pi $\backslash$x.t)}.
+\end{itemize}
+Another syntactic sugar we provide is the ability to enclose terms
+obtained from multiple applications within a single pair of brackets.
+So, a term like {\tt (((f x) y) z)} can be more simply written as 
+{\tt (f x y z)}.
+
+\begin{small}
+\begin{verbatim}
+    term_sugar : '(' term term terms ')' 
+               | '{' terms_product '}'
+               | '[' terms_product ']' 
+               | '\' "exists" VARIABLE '.' term
+               | '\' "forall" VARIABLE '.' term 
+               ;
+\end{verbatim}
+\end{small}
+
+To facilitate type checking, the signature of every constant used in
+the program must be explicitly stated.
+The grammar for such type declarations is given below.
+Type synonyms can be used to simplify these type declarations.
+
+\begin{verbatim}
+    type_info : functionsymbol ':' type ';'
+              | dataconstructors ':' type ';'
+              | "type" IDENTIFIER2 '=' type ';'
+              ;
+   functionsymbol : IDENTIFIER1 | FUNCTION ;
+
+   dataconstructors : dataconstructor | dataconstructors ',' dataconstructor ;
+   dataconstructor : IDENTIFIER2 | DATA_CONSTRUCTOR ;
+\end{verbatim}
+
+We now look at the grammar for types.
+A parameter (type variable) is a type.
+These are alphanumerics that start with a lower case letter.
+Each of the basic nullary type constructors like Bool, Number and
+String is a type. 
+If {\tt T} is a $n$-ary type constructor and {\tt t1}, {\tt t2},
+$\ldots$, {\tt tn} are types, then {\tt (T t1 t2 $\ldots$ tn)} is a
+type. 
+If {\tt t1} and {\tt t2} are types, then {\tt t1 -> t2} is a type.
+If {\tt t1}, {\tt t2}, $\ldots$, {\tt tn} are types, then 
+{\tt (t1 * t2 * $\ldots$ * tn)} is a type.
+
+\begin{verbatim}
+    type : IDENTIFIER1 
+         | "Bool" | "Number" | "String" | IDENTIFIER2 
+         | '(' IDENTIFIER2 types ')' 
+         | '(' products ')'
+         | type "->" type
+         | '(' type ')'
+         ;
+    products : products '*' type | type '*' type ;
+      
+    types : type | types type ;
+\end{verbatim}
+
+Here are the regular expressions for the tokens used in the grammar.
+IDENTIFIER1 are alphanumerics that start with a lower case letter.
+IDENTIFIER2 are alphanumerics that start with an upper case letter.
+System-defined data constructors and functions are declared here.
+A file that can be imported into the spec file must end with ``.e''.
+Variables and syntactic variables are also governed by fixed rules
+here.
+Care should be taken with variables.
+A lot of programming errors are associated with the use of variable
+names that does not actually conform to the grammar.
+
+\begin{small}
+\begin{verbatim}
+    IDENTIFIER1 = [a-z][a-zA-Z0-9\_\']*
+    IDENTIFIER2 = [A-Z][a-zA-Z0-9\_\']*
+    DATA_CONSTRUCTOR = (True | False | # | []) 
+    DATA_CONSTRUCTOR_FLOAT = -?[0-9]+\.[0-9]+
+    DATA_CONSTRUCTOR_INT = -?[0-9]+
+    DATA_CONSTRUCTOR_STRING = \"[a-zA-Z0-9\-\_\+\: ]*\"
+    FUNCTION = (== | /= | <= | < | >= | > | && | ||)
+    FILENAME = [a-zA-Z\/0-9\_\.]+\.es
+    VARIABLE = [m-z][0-9]*
+    SYNTACTIC_VARIABLE = [a-zA-Z][0-9]*\_SV
+\end{verbatim}
+\end{small}
+
+%% \section{Escher's Syntax}
+%% 
+%% \begin{small}
+%% \begin{verbatim}
+%% input : statement_schemas ;
+%% 
+%% statement_schemas : /* empty */ | statement_schemas statement_schema ;
+%% 
+%% statement_schema : term_schema '=' term_schema ;
+%% 
+%% term_schema : SYNTACTIC_VARIABLE
+%%             | VARIABLE
+%%             | CONSTANT
+%%             | '\\' VARIABLE '.' term_schema
+%%             | '(' term_schema term_schema ')'
+%%             | '(' term_schemas_product ')'
+%%             ;
+%% 
+%% term_schemas_product : /* empty */
+%%             | term_schema
+%%             | term_schemas_product ',' term_schema ;
+%% \end{verbatim}
+%% \end{small}
+
+%% sigma and pi in place of exists and forall
+
+
+% \section{Pattern Matching}
+% As stated in \cite[pp. 116,122]{thompson99haskell}, a Haskell pattern
+% is one of the following: 
+% \begin{itemize}\itemsep1mm\parskip=0mm
+%  \item a literal value such as 24, True, etc; 
+%  \item a variable; 
+%  \item a wildcard `\_'; 
+%  \item a tuple pattern $(p_1,p_2,\ldots,p_n)$;
+%  \item a constructor applied to a number of patterns.
+% \end{itemize} 
+% Escher extends this by allowing pattern matching on function symbols
+% and syntactic variables (variables in the meta-language).
+
+% \begin{example}
+% An example of Escherian matching on syntactic variables is the
+% following equality rule for data constructors in the Booleans module:
+% \begin{gather*}
+%  ({\bf C}\,x_1 \ldots x_n = {\bf C}\,y_1 \ldots y_n) =
+%     (x_1 = y_1) \wedge \cdots \wedge (x_n = y_n) \\
+% \hspace{4em}   \text{\% where ${\bf C}$ is a data constructor of arity $n$.}
+% \end{gather*}
+% \end{example}
+% 
+% \begin{example}
+% An example of Escherian matching on function symbols is the following
+% rule for conjunction in the Booleans module:
+% \[ (x \vee y) \wedge z = (x \wedge z) \vee (y \wedge z). \]
+% \end{example}
+% 
+% \begin{example}
+% An example of Escherian matching on both function symbols and
+% syntactical variables is the following rule for conjunction:
+% \[ {\bf u} \wedge (\exists x_1.\cdots \exists x_n.{\bf v}) =
+%      \exists x_1.\cdots \exists x_n.({\bf u} \wedge {\bf v}). \]
+% \end{example}
+
+% In both Haskell and Escher, there is a constraint in that no (free)
+% variable can have multiple occurences in a pattern.
+% This property is needed to prove so-called ``run-time type-checking
+% is unnecessary'' results. 
+% See Definition 5.1.1, Proposition 5.1.3 and Example 5.1.4 in
+% \cite{lloyd03logic-learning} for details.
+
+% \section{Redex Selection}
+% A redex in Escher can contain variables, unlike in Haskell.
+% Escher performs parallel outermost redex selection whereas Haskell
+% does leftmost outermost redex selection.
+% 
+% \section{Questions about Escher}
+% \begin{question}
+% Why do we need the convention for syntatical variables given on
+% pg 188? As far as I can tell, it only applies to the statement (and
+% its variant) above it.
+% \end{question}
+% 
+% \begin{question} 
+% Syntactical variables aren't needed just for the case when term
+% substitution result in problems. They are also used for side
+% conditions. For example, see the first statements of $=$ and
+% $\mathit{less}$. 
+% \end{question}
+% 
+% \begin{question}
+% Why isn't there any rules for implies?
+% \end{question}
+% 
+% \begin{question}
+% The `definition' corresponding to $\beta$-reduction on pg 192
+% is not a statement because it doesn't start with a function symbol.
+% \end{question}
+% 
